@@ -7,6 +7,40 @@ const fs = require('fs').promises;
 const path = require('path');
 const { google } = require('googleapis');
 const crypto = require('crypto');
+const admin = require('firebase-admin');
+
+// Initialize Firebase
+const serviceAccount = require('./grublens-firebase-key.json');
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  storageBucket: 'grublens-storage.appspot.com'
+});
+
+const bucket = admin.storage().bucket();
+
+// Function to upload image to Firebase
+async function uploadImageToFirebase(imageUrl, recipeName) {
+  try {
+    const response = await fetch(imageUrl);
+    const buffer = await response.buffer();
+    
+    const fileName = `recipe-images/${Date.now()}-${recipeName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.jpg`;
+    const file = bucket.file(fileName);
+    
+    await file.save(buffer, {
+      metadata: {
+        contentType: 'image/jpeg',
+      },
+    });
+    
+    await file.makePublic();
+    
+    return `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+  } catch (error) {
+    console.error('Error uploading to Firebase:', error);
+    return imageUrl; // Fallback to original URL
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -348,11 +382,16 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
             quality: imageQuality
           });
           
-          recipe.imageUrl = imageResponse.data[0].url;
-          console.log('Image URL generated:', recipe.imageUrl.substring(0, 30) + '...');
-          
-          // Cache the image URL
-          cacheImage(recipe.name, recipe.ingredients, recipe.imageUrl);
+          const dalleUrl = imageResponse.data[0].url;
+          console.log('DALL-E URL generated:', dalleUrl.substring(0, 30) + '...');
+
+          // Upload to Firebase for permanent storage
+          const firebaseUrl = await uploadImageToFirebase(dalleUrl, recipe.name);
+          recipe.imageUrl = firebaseUrl;
+          console.log('Firebase URL:', firebaseUrl);
+
+          // Cache the Firebase URL instead
+          cacheImage(recipe.name, recipe.ingredients, firebaseUrl);
         }
       } catch (imageError) {
         console.error('Image generation error:', imageError);
@@ -407,7 +446,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date(),
     features: {
       imageGeneration: true,
-      subscriptionTiers: true
+      subscriptionTiers: true,
+      firebaseStorage: true
     }
   });
 });
@@ -418,18 +458,20 @@ app.get('/api/test', (req, res) => {
     message: 'GrubLens API is working!',
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set',
-    version: '1.1.0'
+    version: '1.2.0',
+    hasFirebase: !!admin.apps.length
   });
 });
 
 // Root path handler
 app.get('/', (req, res) => {
-  res.send('GrubLens API is running. See /health for status.');
+  res.send('GrubLens API is running with Firebase Storage. See /health for status.');
 });
 
 app.listen(PORT, () => {
   console.log(`GrubLens server running on port ${PORT}`);
   console.log(`OpenAI API Key configured: ${!!process.env.OPENAI_API_KEY}`);
+  console.log(`Firebase Storage configured: ${!!admin.apps.length}`);
 }).on('error', (err) => {
   console.error('Server error:', err);
 });
