@@ -313,50 +313,50 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
       ];
     }
 
-    // Generate images for recipes if user is on basic or premium tier
-    if (userData.subscriptionTier !== 'free') {
-      console.log(`Generating images for ${userData.subscriptionTier} tier user`);
-      
-      const imageQuality = userData.subscriptionTier === 'premium' ? 'hd' : 'standard';
-      
-      for (const recipe of recipes) {
-        try {
-          // Check cache first
-          const cachedImageUrl = getCachedImage(recipe.name, recipe.ingredients);
+    // IMPORTANT CHANGE: Generate images for ALL tiers (including free)
+    console.log('Generating images for all users to maximize wow factor');
+    
+    // Get appropriate quality based on tier
+    const imageQuality = userData.subscriptionTier === 'premium' ? 'hd' : 'standard';
+    
+    for (const recipe of recipes) {
+      try {
+        // Check cache first
+        const cachedImageUrl = getCachedImage(recipe.name, recipe.ingredients);
+        
+        if (cachedImageUrl) {
+          console.log('Using cached image for:', recipe.name);
+          recipe.imageUrl = cachedImageUrl;
+        } else {
+          console.log('Generating image for:', recipe.name);
           
-          if (cachedImageUrl) {
-            console.log('Using cached image for:', recipe.name);
-            recipe.imageUrl = cachedImageUrl;
-          } else {
-            console.log('Generating image for:', recipe.name);
-            
-            const ingredientsList = Array.isArray(recipe.ingredients) 
-              ? recipe.ingredients.slice(0, 5).join(', ') // Limit to 5 ingredients in prompt
-              : 'various ingredients';
-            
-            const recipeImagePrompt = `Create a high-quality, professional food photograph 
-              of ${recipe.name} in Joanna Gaines farmhouse style. The dish should be presented 
-              on a rustic wooden table with soft natural lighting, garnished beautifully. 
-              The recipe contains ${ingredientsList}. The photo should look like it belongs 
-              in a premium cookbook, with shallow depth of field and professional food styling.`;
-            
-            const imageResponse = await openai.images.generate({
-              model: "dall-e-3",
-              prompt: recipeImagePrompt,
-              n: 1,
-              size: "1024x1024",
-              quality: imageQuality
-            });
-            
-            recipe.imageUrl = imageResponse.data[0].url;
-            
-            // Cache the image URL
-            cacheImage(recipe.name, recipe.ingredients, recipe.imageUrl);
-          }
-        } catch (imageError) {
-          console.error('Image generation error:', imageError);
-          // Don't fail the whole request if image generation fails
+          const ingredientsList = Array.isArray(recipe.ingredients) 
+            ? recipe.ingredients.slice(0, 5).join(', ') // Limit to 5 ingredients in prompt
+            : 'various ingredients';
+          
+          const recipeImagePrompt = `Create a high-quality, professional food photograph 
+            of ${recipe.name} in Joanna Gaines farmhouse style. The dish should be presented 
+            on a rustic wooden table with soft natural lighting, garnished beautifully. 
+            The recipe contains ${ingredientsList}. The photo should look like it belongs 
+            in a premium cookbook, with shallow depth of field and professional food styling.`;
+          
+          const imageResponse = await openai.images.generate({
+            model: "dall-e-3",
+            prompt: recipeImagePrompt,
+            n: 1,
+            size: "1024x1024",
+            quality: imageQuality
+          });
+          
+          recipe.imageUrl = imageResponse.data[0].url;
+          console.log('Image URL generated:', recipe.imageUrl.substring(0, 30) + '...');
+          
+          // Cache the image URL
+          cacheImage(recipe.name, recipe.ingredients, recipe.imageUrl);
         }
+      } catch (imageError) {
+        console.error('Image generation error:', imageError);
+        // Don't fail the whole request if image generation fails
       }
     }
 
