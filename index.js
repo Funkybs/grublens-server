@@ -6,9 +6,10 @@ const OpenAI = require('openai');
 const fs = require('fs').promises;
 const path = require('path');
 const { google } = require('googleapis');
+const crypto = require('crypto');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -42,6 +43,55 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// In-memory image cache
+const imageCache = new Map();
+
+// In-memory user database (replace with actual database in production)
+const users = new Map();
+
+// Cache management
+const getCachedImage = (recipeName, ingredients) => {
+  // Create a unique hash based on recipe name and ingredients
+  const key = crypto.createHash('md5').update(`${recipeName}-${ingredients.sort().join(',')}`).digest('hex');
+  return imageCache.get(key);
+};
+
+const cacheImage = (recipeName, ingredients, imageUrl) => {
+  const key = crypto.createHash('md5').update(`${recipeName}-${ingredients.sort().join(',')}`).digest('hex');
+  imageCache.set(key, imageUrl);
+  
+  // Limit cache size (remove oldest entries if too large)
+  if (imageCache.size > 1000) {
+    const firstKey = imageCache.keys().next().value;
+    imageCache.delete(firstKey);
+  }
+};
+
+// User management functions
+const getUserData = async (userId) => {
+  // In production, fetch from database
+  if (!users.has(userId)) {
+    // Create default user if not exists
+    users.set(userId, {
+      id: userId,
+      subscriptionTier: 'free', // 'free', 'basic', or 'premium'
+      scansRemaining: 3,        // Free users get 3 scans
+      subscriptionDate: new Date()
+    });
+  }
+  return users.get(userId);
+};
+
+const updateUserScans = async (userId, decrement = true) => {
+  // In production, update in database
+  const userData = await getUserData(userId);
+  if (decrement) {
+    userData.scansRemaining = Math.max(0, userData.scansRemaining - 1);
+  }
+  users.set(userId, userData);
+  return userData;
+};
+
 // Google Play verification
 const verifyGooglePlayPurchase = async (purchaseToken, productId) => {
   try {
@@ -68,15 +118,57 @@ const verifyGooglePlayPurchase = async (purchaseToken, productId) => {
   }
 };
 
-// Endpoint to verify purchases
+// Endpoint to verify purchases and update subscription
 app.post('/api/verify-purchase', async (req, res) => {
   try {
-    const { purchaseToken, productId } = req.body;
+    const { purchaseToken, productId, userId, platform } = req.body;
     
-    const purchaseData = await verifyGooglePlayPurchase(purchaseToken, productId);
+    let isValid = false;
+    let expiryTime = null;
+    let tier = 'free';
     
-    if (purchaseData && purchaseData.paymentState === 1) {
-      res.json({ valid: true, expiryTime: purchaseData.expiryTimeMillis });
+    // Verify based on platform
+    if (platform === 'android') {
+      const purchaseData = await verifyGooglePlayPurchase(purchaseToken, productId);
+      isValid = purchaseData && purchaseData.paymentState === 1;
+      expiryTime = purchaseData?.expiryTimeMillis;
+      
+      // Determine tier based on productId
+      if (productId === 'com.grublens.basic') {
+        tier = 'basic';
+      } else if (productId === 'com.grublens.premium') {
+        tier = 'premium';
+      }
+    } else if (platform === 'ios') {
+      // iOS verification would go here
+      // For now, trust the client for testing
+      isValid = true;
+      expiryTime = Date.now() + (30 * 24 * 60 * 60 * 1000); // 30 days
+      
+      if (productId === 'com.grublens.basic') {
+        tier = 'basic';
+      } else if (productId === 'com.grublens.premium') {
+        tier = 'premium';
+      }
+    }
+    
+    if (isValid) {
+      // Update user subscription
+      const userData = await getUserData(userId);
+      userData.subscriptionTier = tier;
+      userData.subscriptionExpiry = new Date(parseInt(expiryTime));
+      
+      // Reset scan count based on tier
+      userData.scansRemaining = tier === 'premium' ? 40 : (tier === 'basic' ? 15 : 3);
+      
+      users.set(userId, userData);
+      
+      res.json({ 
+        valid: true, 
+        expiryTime, 
+        tier,
+        scansRemaining: userData.scansRemaining
+      });
     } else {
       res.json({ valid: false });
     }
@@ -86,7 +178,7 @@ app.post('/api/verify-purchase', async (req, res) => {
   }
 });
 
-// Enhanced recipe analysis endpoint
+// Enhanced recipe analysis endpoint with image generation
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
   try {
     console.log('Received request to analyze groceries');
@@ -101,6 +193,19 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'OpenAI API key not configured' });
     }
 
+    // Get user data
+    const userId = req.body.userId || 'anonymous';
+    const userData = await getUserData(userId);
+    
+    // Check if user has scans remaining
+    if (userData.scansRemaining <= 0 && userData.subscriptionTier !== 'free') {
+      return res.status(403).json({ 
+        error: 'No scans remaining',
+        scansRemaining: 0,
+        subscriptionTier: userData.subscriptionTier
+      });
+    }
+
     console.log('Processing image:', req.file.filename);
 
     // Read the image file
@@ -109,24 +214,24 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
 
     // Enhanced prompt for premium recipes with improved instructions to only use visible ingredients
     const response = await openai.chat.completions.create({
-  model: "gpt-4-turbo", // Changed to current best vision model
-  max_tokens: 4000,
-  temperature: 0.7,
-  messages: [
-    {
-      role: "system",
-      content: `You are a professional chef creating elegant, gourmet recipes in the style of Joanna Gaines - focusing on fresh, wholesome ingredients with a sophisticated farmhouse touch.
+      model: "gpt-4-turbo", // Changed to current best vision model
+      max_tokens: 4000,
+      temperature: 0.7,
+      messages: [
+        {
+          role: "system",
+          content: `You are a professional chef creating elegant, gourmet recipes in the style of Joanna Gaines - focusing on fresh, wholesome ingredients with a sophisticated farmhouse touch.
 
 CRITICAL RULE: Only use ingredients that are CLEARLY VISIBLE in the provided image. Identify ingredients precisely - for example, if you see tuna steaks, call them "tuna steaks" not "red peppers". If you see steak, identify the cut if possible.
 
 Your responses should be realistic, practical recipes based solely on the visible food items in the image. BE EXTREMELY PRECISE in identifying the ingredients shown.`
-    },
-    {
-      role: "user",
-      content: [
+        },
         {
-          type: "text",
-          text: `Analyze this image of groceries and create 3 gourmet recipes that use ONLY the ingredients visible in the photo.
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Analyze this image of groceries and create 3 gourmet recipes that use ONLY the ingredients visible in the photo.
 
 ${req.body?.preferences ? `Consider these dietary preferences: ${req.body.preferences}` : ''}
 ${req.body?.instructions ? `Special instructions: ${req.body.instructions}` : ''}
@@ -141,17 +246,17 @@ For each recipe, provide:
 - tips: Professional chef tips for best results
 
 Format as JSON array with these exact keys. Include ONLY ingredients that can be seen in the image.`
-        },
-        {
-          type: "image_url",
-          image_url: {
-            url: `data:image/jpeg;base64,${base64Image}`
-          }
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Image}`
+              }
+            }
+          ]
         }
       ]
-    }
-  ]
-});
+    });
 
     console.log('OpenAI response received');
 
@@ -208,8 +313,62 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
       ];
     }
 
+    // Generate images for recipes if user is on basic or premium tier
+    if (userData.subscriptionTier !== 'free') {
+      console.log(`Generating images for ${userData.subscriptionTier} tier user`);
+      
+      const imageQuality = userData.subscriptionTier === 'premium' ? 'hd' : 'standard';
+      
+      for (const recipe of recipes) {
+        try {
+          // Check cache first
+          const cachedImageUrl = getCachedImage(recipe.name, recipe.ingredients);
+          
+          if (cachedImageUrl) {
+            console.log('Using cached image for:', recipe.name);
+            recipe.imageUrl = cachedImageUrl;
+          } else {
+            console.log('Generating image for:', recipe.name);
+            
+            const ingredientsList = Array.isArray(recipe.ingredients) 
+              ? recipe.ingredients.slice(0, 5).join(', ') // Limit to 5 ingredients in prompt
+              : 'various ingredients';
+            
+            const recipeImagePrompt = `Create a high-quality, professional food photograph 
+              of ${recipe.name} in Joanna Gaines farmhouse style. The dish should be presented 
+              on a rustic wooden table with soft natural lighting, garnished beautifully. 
+              The recipe contains ${ingredientsList}. The photo should look like it belongs 
+              in a premium cookbook, with shallow depth of field and professional food styling.`;
+            
+            const imageResponse = await openai.images.generate({
+              model: "dall-e-3",
+              prompt: recipeImagePrompt,
+              n: 1,
+              size: "1024x1024",
+              quality: imageQuality
+            });
+            
+            recipe.imageUrl = imageResponse.data[0].url;
+            
+            // Cache the image URL
+            cacheImage(recipe.name, recipe.ingredients, recipe.imageUrl);
+          }
+        } catch (imageError) {
+          console.error('Image generation error:', imageError);
+          // Don't fail the whole request if image generation fails
+        }
+      }
+    }
+
+    // Update user's scan count
+    const updatedUserData = await updateUserScans(userId);
+
     console.log('Sending recipes to client');
-    res.json({ recipes });
+    res.json({ 
+      recipes,
+      scansRemaining: updatedUserData.scansRemaining,
+      subscriptionTier: updatedUserData.subscriptionTier
+    });
 
   } catch (error) {
     console.error('Error in analyze-groceries:', error);
@@ -224,9 +383,33 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
   }
 });
 
+// Endpoint to check user subscription status
+app.get('/api/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const userData = await getUserData(userId);
+    
+    res.json({
+      subscriptionTier: userData.subscriptionTier,
+      scansRemaining: userData.scansRemaining,
+      subscriptionExpiry: userData.subscriptionExpiry
+    });
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ error: 'Failed to fetch user data' });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date(),
+    features: {
+      imageGeneration: true,
+      subscriptionTiers: true
+    }
+  });
 });
 
 // Test endpoint for debugging
@@ -235,8 +418,13 @@ app.get('/api/test', (req, res) => {
     message: 'GrubLens API is working!',
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set',
-    version: '1.0.1'
+    version: '1.1.0'
   });
+});
+
+// Root path handler
+app.get('/', (req, res) => {
+  res.send('GrubLens API is running. See /health for status.');
 });
 
 app.listen(PORT, () => {
@@ -250,3 +438,22 @@ app.listen(PORT, () => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
+
+// Scheduled task to reset scan counts monthly (in production, use a proper scheduler)
+// This is just a demonstration - in production use cron jobs or similar
+const resetAllScanCounts = async () => {
+  for (const [userId, userData] of users.entries()) {
+    if (userData.subscriptionTier === 'premium') {
+      userData.scansRemaining = 40;
+    } else if (userData.subscriptionTier === 'basic') {
+      userData.scansRemaining = 15;
+    } else {
+      userData.scansRemaining = 3; // Free tier
+    }
+    users.set(userId, userData);
+  }
+  console.log('Reset all scan counts');
+};
+
+// Uncomment to test the reset function
+// setTimeout(resetAllScanCounts, 10000);
