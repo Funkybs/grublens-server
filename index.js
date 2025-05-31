@@ -9,20 +9,8 @@ const { google } = require('googleapis');
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 
-// Initialize Firebase with environment variables instead of JSON file
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(process.env.FIREBASE_CLIENT_EMAIL || '')}`
-};
-
+// Initialize Firebase
+const serviceAccount = require('./grublens-firebase-key.json');
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   storageBucket: 'grublens-storage.appspot.com'
@@ -34,7 +22,8 @@ const bucket = admin.storage().bucket();
 async function uploadImageToFirebase(imageUrl, recipeName) {
   try {
     const response = await fetch(imageUrl);
-    const buffer = await response.buffer();
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
     
     const fileName = `recipe-images/${Date.now()}-${recipeName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.jpg`;
     const file = bucket.file(fileName);
@@ -471,8 +460,7 @@ app.get('/api/test', (req, res) => {
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set',
     version: '1.2.0',
-    hasFirebase: !!admin.apps.length,
-    firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL)
+    hasFirebase: !!admin.apps.length
   });
 });
 
@@ -485,7 +473,6 @@ app.listen(PORT, () => {
   console.log(`GrubLens server running on port ${PORT}`);
   console.log(`OpenAI API Key configured: ${!!process.env.OPENAI_API_KEY}`);
   console.log(`Firebase Storage configured: ${!!admin.apps.length}`);
-  console.log(`Using environment variables for Firebase: ${!!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL)}`);
 }).on('error', (err) => {
   console.error('Server error:', err);
 });
