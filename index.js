@@ -25,7 +25,7 @@ const serviceAccount = {
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  storageBucket: 'grublens-storage.appspot.com'
+  storageBucket: 'grublens-storage.firebasestorage.app'  // FIXED: Using the correct bucket name!
 });
 
 const bucket = admin.storage().bucket();
