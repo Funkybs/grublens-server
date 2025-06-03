@@ -25,10 +25,11 @@ const serviceAccount = {
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  storageBucket: 'grublens-storage.firebasestorage.app'  // FIXED: Using the correct bucket name!
+  storageBucket: 'grublens-storage.firebasestorage.app'
 });
 
 const bucket = admin.storage().bucket();
+const db = admin.firestore();
 
 // Function to upload image to Firebase
 async function uploadImageToFirebase(imageUrl, recipeName) {
@@ -51,7 +52,7 @@ async function uploadImageToFirebase(imageUrl, recipeName) {
     return `https://storage.googleapis.com/${bucket.name}/${fileName}`;
   } catch (error) {
     console.error('Error uploading to Firebase:', error);
-    return imageUrl; // Fallback to original URL
+    return imageUrl;
   }
 }
 
@@ -82,7 +83,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 // Initialize OpenAI
@@ -93,12 +94,8 @@ const openai = new OpenAI({
 // In-memory image cache
 const imageCache = new Map();
 
-// In-memory user database (replace with actual database in production)
-const users = new Map();
-
-// Cache management
+// Cache management functions
 const getCachedImage = (recipeName, ingredients) => {
-  // Create a unique hash based on recipe name and ingredients
   const key = crypto.createHash('md5').update(`${recipeName}-${ingredients.sort().join(',')}`).digest('hex');
   return imageCache.get(key);
 };
@@ -107,36 +104,164 @@ const cacheImage = (recipeName, ingredients, imageUrl) => {
   const key = crypto.createHash('md5').update(`${recipeName}-${ingredients.sort().join(',')}`).digest('hex');
   imageCache.set(key, imageUrl);
   
-  // Limit cache size (remove oldest entries if too large)
   if (imageCache.size > 1000) {
     const firstKey = imageCache.keys().next().value;
     imageCache.delete(firstKey);
   }
 };
 
-// User management functions
+// User management functions with Firestore
 const getUserData = async (userId) => {
-  // In production, fetch from database
-  if (!users.has(userId)) {
-    // Create default user if not exists
-    users.set(userId, {
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      // Create new user
+      const newUser = {
+        id: userId,
+        subscriptionTier: 'free',
+        scansRemaining: 3,
+        scansUsed: 0,
+        lastResetDate: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      
+      await db.collection('users').doc(userId).set(newUser);
+      return newUser;
+    }
+    
+    const userData = userDoc.data();
+    
+    // Check if month changed (reset scans for subscribers)
+    const now = new Date();
+    const lastReset = new Date(userData.lastResetDate);
+    if (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear()) {
+      const updates = {
+        lastResetDate: now,
+        updatedAt: now
+      };
+      
+      if (userData.subscriptionTier === 'basic') {
+        updates.scansRemaining = 15;
+      } else if (userData.subscriptionTier === 'premium') {
+        updates.scansRemaining = 40;
+      }
+      
+      await db.collection('users').doc(userId).update(updates);
+      return { ...userData, ...updates };
+    }
+    
+    return userData;
+  } catch (error) {
+    console.error('Error getting user data:', error);
+    return {
       id: userId,
-      subscriptionTier: 'free', // 'free', 'basic', or 'premium'
-      scansRemaining: 3,        // Free users get 3 scans
-      subscriptionDate: new Date()
-    });
+      subscriptionTier: 'free',
+      scansRemaining: 3
+    };
   }
-  return users.get(userId);
 };
 
 const updateUserScans = async (userId, decrement = true) => {
-  // In production, update in database
-  const userData = await getUserData(userId);
-  if (decrement) {
-    userData.scansRemaining = Math.max(0, userData.scansRemaining - 1);
+  try {
+    const userRef = db.collection('users').doc(userId);
+    
+    if (decrement) {
+      await userRef.update({
+        scansRemaining: admin.firestore.FieldValue.increment(-1),
+        scansUsed: admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+    }
+    
+    const updated = await userRef.get();
+    return updated.data();
+  } catch (error) {
+    console.error('Error updating user scans:', error);
   }
-  users.set(userId, userData);
-  return userData;
+};
+
+// Rate limiting function with progressive restrictions
+const checkRateLimits = async (userId, ipAddress, userData) => {
+  try {
+    // Only check rate limits for free users
+    if (userData.subscriptionTier !== 'free') {
+      return { allowed: true };
+    }
+    
+    // Hash the IP for privacy
+    const ipHash = crypto.createHash('md5').update(ipAddress).digest('hex');
+    const monthKey = `${new Date().getFullYear()}-${new Date().getMonth()}`;
+    const rateLimitDocId = `${ipHash}_${monthKey}`;
+    
+    const rateLimitDoc = await db.collection('rateLimits').doc(rateLimitDocId).get();
+    const scanCount = rateLimitDoc.exists ? rateLimitDoc.data().freeScansCount : 0;
+    
+    // Progressive limits
+    const limits = {
+      gentle: 9,      // After 9 scans, show "Last free scan!"
+      warning: 12,    // After 12, show "You're really loving GrubLens!"
+      hard: 15        // After 15, require subscription
+    };
+    
+    // Check if hard limit exceeded
+    if (scanCount >= limits.hard) {
+      return {
+        allowed: false,
+        message: "You've used all available free scans this month. Subscribe to continue!",
+        forcePaywall: true,
+        scansUsedThisMonth: scanCount
+      };
+    }
+    
+    // Increment the count for this scan
+    if (rateLimitDoc.exists) {
+      await db.collection('rateLimits').doc(rateLimitDocId).update({
+        freeScansCount: admin.firestore.FieldValue.increment(1),
+        lastScan: new Date(),
+        userIds: admin.firestore.FieldValue.arrayUnion(userId)
+      });
+    } else {
+      await db.collection('rateLimits').doc(rateLimitDocId).set({
+        freeScansCount: 1,
+        firstScan: new Date(),
+        lastScan: new Date(),
+        ipHash: ipHash,
+        month: monthKey,
+        userIds: [userId]
+      });
+    }
+    
+    // Return appropriate message based on new count
+    const newCount = scanCount + 1;
+    
+    if (newCount >= limits.warning) {
+      return {
+        allowed: true,
+        message: `Only ${limits.hard - newCount} free scans left this month!`,
+        showWarning: true,
+        scansUsedThisMonth: newCount,
+        scansLeftThisMonth: limits.hard - newCount
+      };
+    } else if (newCount >= limits.gentle) {
+      return {
+        allowed: true,
+        message: "Enjoying GrubLens? Upgrade for unlimited scans!",
+        showUpgradeHint: true,
+        scansUsedThisMonth: newCount
+      };
+    }
+    
+    return { 
+      allowed: true,
+      scansUsedThisMonth: newCount
+    };
+  } catch (error) {
+    console.error('Error checking rate limits:', error);
+    // On error, allow the scan but log it
+    return { allowed: true };
+  }
 };
 
 // Google Play verification
@@ -165,56 +290,138 @@ const verifyGooglePlayPurchase = async (purchaseToken, productId) => {
   }
 };
 
+// Apple receipt verification
+const verifyAppleReceipt = async (receiptData) => {
+  try {
+    // Use sandbox for testing, production URL for live app
+    const verifyURL = process.env.NODE_ENV === 'production' 
+      ? 'https://buy.itunes.apple.com/verifyReceipt'
+      : 'https://sandbox.itunes.apple.com/verifyReceipt';
+    
+    const response = await fetch(verifyURL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        'receipt-data': receiptData,
+        'password': process.env.APPLE_SHARED_SECRET // Add this to your .env
+      })
+    });
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Apple receipt verification error:', error);
+    return null;
+  }
+};
+
 // Endpoint to verify purchases and update subscription
 app.post('/api/verify-purchase', async (req, res) => {
   try {
-    const { purchaseToken, productId, userId, platform } = req.body;
+    const { purchaseToken, productId, userId, platform, receiptData } = req.body;
     
     let isValid = false;
     let expiryTime = null;
     let tier = 'free';
+    let permanentUserId = userId;
     
-    // Verify based on platform
     if (platform === 'android') {
       const purchaseData = await verifyGooglePlayPurchase(purchaseToken, productId);
       isValid = purchaseData && purchaseData.paymentState === 1;
       expiryTime = purchaseData?.expiryTimeMillis;
       
-      // Determine tier based on productId
-      if (productId === 'com.grublens.basic') {
-        tier = 'basic';
-      } else if (productId === 'com.grublens.premium') {
-        tier = 'premium';
+      // Use the obfuscated account ID if available
+      if (purchaseData?.obfuscatedAccountId) {
+        permanentUserId = `gplay_${purchaseData.obfuscatedAccountId}`;
       }
-    } else if (platform === 'ios') {
-      // iOS verification would go here
-      // For now, trust the client for testing
-      isValid = true;
-      expiryTime = Date.now() + (30 * 24 * 60 * 60 * 1000); // 30 days
       
       if (productId === 'com.grublens.basic') {
         tier = 'basic';
       } else if (productId === 'com.grublens.premium') {
         tier = 'premium';
+      }
+      
+    } else if (platform === 'ios') {
+      // Verify with Apple
+      const verificationResult = await verifyAppleReceipt(receiptData);
+      
+      if (verificationResult && verificationResult.status === 0) {
+        isValid = true;
+        
+        // Get the latest receipt info
+        const latestReceiptInfo = verificationResult.latest_receipt_info;
+        if (latestReceiptInfo && latestReceiptInfo.length > 0) {
+          const latestPurchase = latestReceiptInfo[latestReceiptInfo.length - 1];
+          
+          // Get expiry time
+          expiryTime = parseInt(latestPurchase.expires_date_ms);
+          
+          // Check if subscription is still active
+          isValid = expiryTime > Date.now();
+          
+          // Try to get a persistent identifier
+          // Apple provides 'original_transaction_id' which is consistent for the same user
+          if (latestPurchase.original_transaction_id) {
+            permanentUserId = `apple_${latestPurchase.original_transaction_id}`;
+          }
+          
+          // Alternatively, if you implement app_account_token (iOS 15+)
+          // This requires setting it when initiating the purchase in your iOS app
+          if (latestPurchase.app_account_token) {
+            permanentUserId = `apple_account_${latestPurchase.app_account_token}`;
+          }
+        }
+        
+        // Determine tier based on product ID
+        if (productId === 'com.grublens.basic') {
+          tier = 'basic';
+        } else if (productId === 'com.grublens.premium') {
+          tier = 'premium';
+        }
       }
     }
     
     if (isValid) {
-      // Update user subscription
-      const userData = await getUserData(userId);
-      userData.subscriptionTier = tier;
-      userData.subscriptionExpiry = new Date(parseInt(expiryTime));
-      
-      // Reset scan count based on tier
-      userData.scansRemaining = tier === 'premium' ? 40 : (tier === 'basic' ? 15 : 3);
-      
-      users.set(userId, userData);
+      // Check if we need to migrate the user's data
+      if (permanentUserId !== userId) {
+        const currentUserData = await getUserData(userId);
+        
+        await db.collection('users').doc(permanentUserId).set({
+          id: permanentUserId,
+          subscriptionTier: tier,
+          subscriptionExpiry: new Date(parseInt(expiryTime)),
+          scansRemaining: tier === 'premium' ? 40 : 15,
+          scansUsed: currentUserData.scansUsed || 0,
+          originalUserId: userId,
+          platform: platform,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }, { merge: true });
+        
+        // Mark old account as migrated
+        if (currentUserData) {
+          await db.collection('users').doc(userId).update({
+            migratedTo: permanentUserId,
+            updatedAt: new Date()
+          });
+        }
+      } else {
+        await db.collection('users').doc(permanentUserId).update({
+          subscriptionTier: tier,
+          subscriptionExpiry: new Date(parseInt(expiryTime)),
+          scansRemaining: tier === 'premium' ? 40 : 15,
+          updatedAt: new Date()
+        });
+      }
       
       res.json({ 
         valid: true, 
         expiryTime, 
         tier,
-        scansRemaining: userData.scansRemaining
+        permanentUserId,
+        scansRemaining: tier === 'premium' ? 40 : 15
       });
     } else {
       res.json({ valid: false });
@@ -225,7 +432,7 @@ app.post('/api/verify-purchase', async (req, res) => {
   }
 });
 
-// Enhanced recipe analysis endpoint with image generation
+// Enhanced recipe analysis endpoint with rate limiting
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
   try {
     console.log('Received request to analyze groceries');
@@ -234,7 +441,6 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'No image provided' });
     }
 
-    // Check if OpenAI API key exists
     if (!process.env.OPENAI_API_KEY) {
       console.error('OpenAI API key is missing!');
       return res.status(500).json({ error: 'OpenAI API key not configured' });
@@ -244,12 +450,37 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     const userId = req.body.userId || 'anonymous';
     const userData = await getUserData(userId);
     
-    // Check if user has scans remaining
-    if (userData.scansRemaining <= 0 && userData.subscriptionTier !== 'free') {
+    // Get user's IP address
+    const userIP = req.headers['x-forwarded-for'] || 
+                   req.connection.remoteAddress || 
+                   req.socket.remoteAddress ||
+                   'unknown';
+    
+    // Check rate limits BEFORE checking user's personal scans
+    const rateLimitCheck = await checkRateLimits(userId, userIP, userData);
+    
+    if (!rateLimitCheck.allowed) {
+      // Clean up uploaded file
+      await fs.unlink(req.file.path);
+      
+      return res.status(403).json({ 
+        error: rateLimitCheck.message,
+        forcePaywall: true,
+        scansUsedThisMonth: rateLimitCheck.scansUsedThisMonth
+      });
+    }
+    
+    // Check if user has personal scans remaining
+    if (userData.scansRemaining <= 0 && userData.subscriptionTier === 'free') {
+      // Clean up uploaded file
+      await fs.unlink(req.file.path);
+      
       return res.status(403).json({ 
         error: 'No scans remaining',
         scansRemaining: 0,
-        subscriptionTier: userData.subscriptionTier
+        subscriptionTier: userData.subscriptionTier,
+        rateLimitWarning: rateLimitCheck.message,
+        showPaywall: rateLimitCheck.showWarning || true
       });
     }
 
@@ -259,9 +490,9 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     const imageBuffer = await fs.readFile(req.file.path);
     const base64Image = imageBuffer.toString('base64');
 
-    // Enhanced prompt for premium recipes with improved instructions to only use visible ingredients
+    // Enhanced prompt for premium recipes
     const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo", // Changed to current best vision model
+      model: "gpt-4-turbo",
       max_tokens: 4000,
       temperature: 0.7,
       messages: [
@@ -316,12 +547,10 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
       const content = response.choices[0].message.content;
       console.log('Raw OpenAI response:', content.substring(0, 200) + '...');
       
-      // Extract JSON from the response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         recipes = JSON.parse(jsonMatch[0]);
         
-        // Post-process recipes to ensure they have all required fields
         recipes = recipes.map(recipe => {
           return {
             name: recipe.name || "Delicious Recipe",
@@ -340,7 +569,6 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
       console.error('Parse error:', parseError);
       console.log('Full response:', response.choices[0].message.content);
       
-      // Fallback recipes
       recipes = [
         {
           name: "Simple Ingredient Combination",
@@ -360,15 +588,13 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
       ];
     }
 
-    // IMPORTANT CHANGE: Generate images for ALL tiers (including free)
+    // Generate images for all users
     console.log('Generating images for all users to maximize wow factor');
     
-    // Get appropriate quality based on tier
     const imageQuality = userData.subscriptionTier === 'premium' ? 'hd' : 'standard';
     
     for (const recipe of recipes) {
       try {
-        // Check cache first
         const cachedImageUrl = getCachedImage(recipe.name, recipe.ingredients);
         
         if (cachedImageUrl) {
@@ -378,7 +604,7 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
           console.log('Generating image for:', recipe.name);
           
           const ingredientsList = Array.isArray(recipe.ingredients) 
-            ? recipe.ingredients.slice(0, 5).join(', ') // Limit to 5 ingredients in prompt
+            ? recipe.ingredients.slice(0, 5).join(', ')
             : 'various ingredients';
           
           const recipeImagePrompt = `Create a high-quality, professional food photograph 
@@ -398,17 +624,14 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
           const dalleUrl = imageResponse.data[0].url;
           console.log('DALL-E URL generated:', dalleUrl.substring(0, 30) + '...');
 
-          // Upload to Firebase for permanent storage
           const firebaseUrl = await uploadImageToFirebase(dalleUrl, recipe.name);
           recipe.imageUrl = firebaseUrl;
           console.log('Firebase URL:', firebaseUrl);
 
-          // Cache the Firebase URL instead
           cacheImage(recipe.name, recipe.ingredients, firebaseUrl);
         }
       } catch (imageError) {
         console.error('Image generation error:', imageError);
-        // Don't fail the whole request if image generation fails
       }
     }
 
@@ -419,14 +642,18 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
     res.json({ 
       recipes,
       scansRemaining: updatedUserData.scansRemaining,
-      subscriptionTier: updatedUserData.subscriptionTier
+      subscriptionTier: updatedUserData.subscriptionTier,
+      rateLimitWarning: rateLimitCheck.message,
+      showUpgradeHint: rateLimitCheck.showUpgradeHint,
+      showWarning: rateLimitCheck.showWarning,
+      scansUsedThisMonth: rateLimitCheck.scansUsedThisMonth,
+      scansLeftThisMonth: rateLimitCheck.scansLeftThisMonth
     });
 
   } catch (error) {
     console.error('Error in analyze-groceries:', error);
     console.error('Error details:', error.message);
     
-    // Send proper JSON error response
     res.status(500).json({ 
       error: 'Failed to analyze groceries',
       message: error.message,
@@ -460,7 +687,10 @@ app.get('/health', (req, res) => {
     features: {
       imageGeneration: true,
       subscriptionTiers: true,
-      firebaseStorage: true
+      firebaseStorage: true,
+      rateLimiting: true,
+      iosSupport: true,
+      androidSupport: true
     }
   });
 });
@@ -470,8 +700,9 @@ app.get('/api/test', (req, res) => {
   res.json({ 
     message: 'GrubLens API is working!',
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    hasAppleSecret: !!process.env.APPLE_SHARED_SECRET,
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set',
-    version: '1.2.0',
+    version: '1.4.0',
     hasFirebase: !!admin.apps.length,
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL)
   });
@@ -479,14 +710,16 @@ app.get('/api/test', (req, res) => {
 
 // Root path handler
 app.get('/', (req, res) => {
-  res.send('GrubLens API is running with Firebase Storage. See /health for status.');
+  res.send('GrubLens API v1.4.0 - iOS + Android Support, Firebase Storage, and Rate Limiting. See /health for status.');
 });
 
 app.listen(PORT, () => {
   console.log(`GrubLens server running on port ${PORT}`);
   console.log(`OpenAI API Key configured: ${!!process.env.OPENAI_API_KEY}`);
+  console.log(`Apple Shared Secret configured: ${!!process.env.APPLE_SHARED_SECRET}`);
   console.log(`Firebase Storage configured: ${!!admin.apps.length}`);
-  console.log(`Using environment variables for Firebase: ${!!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL)}`);
+  console.log(`Rate limiting enabled: true`);
+  console.log(`Platform support: iOS + Android`);
 }).on('error', (err) => {
   console.error('Server error:', err);
 });
@@ -495,22 +728,3 @@ app.listen(PORT, () => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
-
-// Scheduled task to reset scan counts monthly (in production, use a proper scheduler)
-// This is just a demonstration - in production use cron jobs or similar
-const resetAllScanCounts = async () => {
-  for (const [userId, userData] of users.entries()) {
-    if (userData.subscriptionTier === 'premium') {
-      userData.scansRemaining = 40;
-    } else if (userData.subscriptionTier === 'basic') {
-      userData.scansRemaining = 15;
-    } else {
-      userData.scansRemaining = 3; // Free tier
-    }
-    users.set(userId, userData);
-  }
-  console.log('Reset all scan counts');
-};
-
-// Uncomment to test the reset function
-// setTimeout(resetAllScanCounts, 10000);
