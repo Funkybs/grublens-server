@@ -593,6 +593,88 @@ app.post('/api/verify-subscription-status', async (req, res) => {
   }
 });
 
+// 🔧 MISSING ENDPOINT FIX: Legacy endpoint for backward compatibility
+app.post('/api/verify-purchase', async (req, res) => {
+  console.log('🔐🍎📱 LEGACY VERIFY-PURCHASE ENDPOINT (redirecting to new endpoint)');
+  
+  try {
+    const { userId, platform, productId, transactionId, originalTransactionId, receiptData, purchaseToken, verificationSource } = req.body;
+    
+    console.log('🔐🍎📱 Legacy verification request:', {
+      userId,
+      platform,
+      productId,
+      verificationSource: verificationSource || 'legacy_purchase_update',
+      hasReceiptData: !!receiptData,
+      hasPurchaseToken: !!purchaseToken
+    });
+    
+    if (!userId || !platform) {
+      return res.status(400).json({ 
+        valid: false, 
+        subscriptionStatus: 'invalid',
+        error: 'Missing required fields: userId, platform' 
+      });
+    }
+    
+    let verificationResult;
+    
+    if (platform === 'ios') {
+      verificationResult = await verifySubscriptionStatus({
+        productId,
+        transactionId,
+        originalTransactionId,
+        receiptData
+      });
+    } else if (platform === 'android') {
+      // For Android, implement Google Play verification here
+      // For now, basic validation
+      verificationResult = { 
+        valid: !!purchaseToken, 
+        subscriptionStatus: !!purchaseToken ? 'active' : 'invalid',
+        tier: productId && productId.includes('premium') ? 'premium' : 'basic'
+      };
+    } else {
+      return res.status(400).json({ 
+        valid: false, 
+        subscriptionStatus: 'invalid',
+        error: 'Unsupported platform' 
+      });
+    }
+    
+    if (verificationResult.valid && verificationResult.subscriptionStatus === 'active') {
+      console.log('🔐🍎📱 ✅ Legacy: Subscription verified, updating database...');
+      
+      // Update user in database
+      const updateData = {
+        subscriptionStatus: verificationResult.subscriptionStatus,
+        tier: verificationResult.tier,
+        scansRemaining: verificationResult.tier === 'premium' ? 40 : 15,
+        subscriptionExpiryDate: verificationResult.expiryDate || null,
+        autoRenewStatus: verificationResult.autoRenewStatus || false,
+        appleUserId: verificationResult.appleUserId || null,
+        lastStatusCheck: new Date(),
+        updatedAt: new Date()
+      };
+      
+      await db.collection('users').doc(userId).set(updateData, { merge: true });
+      
+      console.log('🔐🍎📱 ✅ Legacy: Database updated successfully');
+    }
+    
+    res.json(verificationResult);
+    
+  } catch (error) {
+    console.error('🔐🍎📱 ❌ Legacy verification error:', error);
+    res.status(500).json({ 
+      valid: false,
+      subscriptionStatus: 'error',
+      error: 'Verification failed',
+      message: error.message
+    });
+  }
+});
+
 // Update user subscription status endpoint
 app.put('/api/user/:userId/subscription-status', async (req, res) => {
   try {
@@ -916,7 +998,8 @@ app.get('/health', (req, res) => {
       rateLimiting: true, 
       subscriptionStatusTracking: true,
       autoRenewalDetection: true,
-      expiryManagement: true
+      expiryManagement: true,
+      legacyEndpointSupport: true
     } 
   }); 
 }); 
@@ -933,7 +1016,8 @@ app.get('/api/test', (req, res) => {
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
     subscriptionModel: 'PROFESSIONAL_APPLE_VERIFIED',
     appleSupportLevel: 'PRODUCTION_AND_SANDBOX',
-    androidSupportLevel: 'GOOGLE_PLAY_READY'
+    androidSupportLevel: 'GOOGLE_PLAY_READY',
+    endpointCompatibility: 'LEGACY_SUPPORT_ENABLED'
   }); 
 }); 
 
@@ -950,6 +1034,7 @@ app.listen(PORT, () => {
   console.log(`📱 Platform Support: iOS (Production + Sandbox) + Android (Google Play)`); 
   console.log(`🎯 Subscription Model: PROFESSIONAL - Like Netflix/Spotify`);
   console.log(`⚡ Features: Auto-renewal tracking, Expiry management, Receipt verification`);
+  console.log(`🔧 Compatibility: Legacy endpoint support enabled`);
   console.log(`🏆 READY FOR APP STORE APPROVAL!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
