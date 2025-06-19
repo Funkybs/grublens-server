@@ -487,15 +487,11 @@ app.get('/api/user/:userId', async (req, res) => {
     const userData = await getUserData(userId); 
     
     if (!userData) {
-      console.log('📊👤 User not found, returning free tier defaults');
-      return res.json({
-        subscriptionStatus: 'free',
-        tier: 'free',
-        scansRemaining: 3,
-        subscriptionExpiryDate: null,
-        autoRenewStatus: false
-      });
-    }
+  console.log('📊👤 User not found, returning 404');
+  return res.status(404).json({
+    error: 'User not found'
+  });
+}
      
     res.json({ 
       subscriptionStatus: userData.subscriptionStatus || 'free',
