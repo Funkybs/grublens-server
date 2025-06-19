@@ -178,7 +178,7 @@ const verifyAppleReceipt = async (receiptData) => {
   } 
 }; 
 
-// 🔥 PROFESSIONAL USER MANAGEMENT
+// 🔥 PROFESSIONAL USER MANAGEMENT - FIXED CRITICAL BUG
 const getUserData = async (deviceId) => { 
   try { 
     console.log('📊👤 Getting user data for device:', deviceId);
@@ -189,7 +189,8 @@ const getUserData = async (deviceId) => {
       return null;
     } 
      
-    const userData = userDoc.data(); 
+    // 🚨 CRITICAL FIX: Use let instead of const for userData
+    let userData = userDoc.data(); 
     console.log('📊👤 User data retrieved:', {
       id: userData.id,
       subscriptionStatus: userData.subscriptionStatus,
@@ -214,7 +215,8 @@ const getUserData = async (deviceId) => {
         };
         
         await db.collection('users').doc(deviceId).update(expiredUpdate);
-        return { ...userData, ...expiredUpdate };
+        // 🚨 CRITICAL FIX: Update userData properly
+        userData = { ...userData, ...expiredUpdate };
       }
     }
     
@@ -237,7 +239,8 @@ const getUserData = async (deviceId) => {
       }; 
        
       await db.collection('users').doc(deviceId).update(resetUpdate); 
-      return { ...userData, ...resetUpdate }; 
+      // 🚨 CRITICAL FIX: Update userData properly
+      userData = { ...userData, ...resetUpdate }; 
     } 
      
     return userData; 
@@ -487,11 +490,11 @@ app.get('/api/user/:userId', async (req, res) => {
     const userData = await getUserData(userId); 
     
     if (!userData) {
-  console.log('📊👤 User not found, returning 404');
-  return res.status(404).json({
-    error: 'User not found'
-  });
-}
+      console.log('📊👤 User not found, returning 404');
+      return res.status(404).json({
+        error: 'User not found'
+      });
+    }
      
     res.json({ 
       subscriptionStatus: userData.subscriptionStatus || 'free',
@@ -763,7 +766,7 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     } 
 
     const userId = req.body.userId || 'anonymous'; 
-    const userData = await getUserData(userId); 
+    let userData = await getUserData(userId); // 🚨 FIX: Use let instead of const
      
     if (!userData) {
       console.log('📷🔍 User not found, creating free tier user...');
@@ -776,8 +779,7 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
         createdAt: new Date(),
         updatedAt: new Date()
       });
-      const newUserData = await getUserData(userId);
-      userData = newUserData;
+      userData = await getUserData(userId); // 🚨 FIX: Reassign properly
     }
     
     const userIP = req.headers['x-forwarded-for'] ||  
@@ -984,7 +986,7 @@ app.get('/health', (req, res) => {
   res.json({  
     status: 'ok',  
     timestamp: new Date(), 
-    version: '4.0.0-professional-subscriptions',
+    version: '4.0.1-CRITICAL-FIXES',
     features: { 
       imageGeneration: true, 
       professionalSubscriptions: true,
@@ -995,7 +997,8 @@ app.get('/health', (req, res) => {
       subscriptionStatusTracking: true,
       autoRenewalDetection: true,
       expiryManagement: true,
-      legacyEndpointSupport: true
+      legacyEndpointSupport: true,
+      criticalBugsFixed: true
     } 
   }); 
 }); 
@@ -1003,23 +1006,24 @@ app.get('/health', (req, res) => {
 // Test endpoint
 app.get('/api/test', (req, res) => { 
   res.json({  
-    message: 'GrubLens Professional Subscription API Ready!', 
+    message: 'GrubLens Professional Subscription API Ready! - CRITICAL BUGS FIXED', 
     hasOpenAIKey: !!process.env.OPENAI_API_KEY, 
     hasAppleSecret: !!process.env.APPLE_SHARED_SECRET, 
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set', 
-    version: '4.0.0-professional-subscriptions',
+    version: '4.0.1-CRITICAL-FIXES',
     hasFirebase: !!admin.apps.length, 
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
     subscriptionModel: 'PROFESSIONAL_APPLE_VERIFIED',
     appleSupportLevel: 'PRODUCTION_AND_SANDBOX',
     androidSupportLevel: 'GOOGLE_PLAY_READY',
-    endpointCompatibility: 'LEGACY_SUPPORT_ENABLED'
+    endpointCompatibility: 'LEGACY_SUPPORT_ENABLED',
+    criticalFixesApplied: 'USER_DATA_ASSIGNMENT_FIXED'
   }); 
 }); 
 
 // Root endpoint
 app.get('/', (req, res) => { 
-  res.send('🍎 GrubLens Professional Subscription API v4.0 - Netflix/Spotify-Level Quality!'); 
+  res.send('🍎 GrubLens Professional Subscription API v4.0.1 - CRITICAL BUGS FIXED!'); 
 }); 
 
 app.listen(PORT, () => { 
@@ -1031,6 +1035,7 @@ app.listen(PORT, () => {
   console.log(`🎯 Subscription Model: PROFESSIONAL - Like Netflix/Spotify`);
   console.log(`⚡ Features: Auto-renewal tracking, Expiry management, Receipt verification`);
   console.log(`🔧 Compatibility: Legacy endpoint support enabled`);
+  console.log(`🛠️ CRITICAL FIXES APPLIED: Assignment to const variable FIXED`);
   console.log(`🏆 READY FOR APP STORE APPROVAL!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
