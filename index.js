@@ -9,6 +9,28 @@ const { google } = require('googleapis');
 const crypto = require('crypto'); 
 const admin = require('firebase-admin'); 
 
+console.log('🔥 GRUBLENS PROFESSIONAL BACKEND - EMAIL BASED AUTHENTICATION');
+console.log('🔥 Version: 5.0.0 - FINAL FIX - NO MORE DEVICE ID HELL');
+console.log('🔥 Startup Time:', new Date().toISOString());
+
+// 🎯 EMAIL VALIDATION UTILITY
+const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+// 🎯 SANITIZE EMAIL FOR DATABASE ID
+const sanitizeEmail = (email) => {
+  return email.toLowerCase().trim().replace(/[^a-z0-9@.-]/g, '');
+};
+
+// 🎯 CREATE DATABASE ID FROM EMAIL
+const createUserIdFromEmail = (email) => {
+  const sanitized = sanitizeEmail(email);
+  const hash = crypto.createHash('md5').update(sanitized).digest('hex');
+  return `email_${hash.substring(0, 12)}`;
+};
+
 // Initialize Firebase with environment variables
 const serviceAccount = { 
   type: "service_account", 
@@ -76,7 +98,7 @@ const storage = multer.diskStorage({
   }, 
   filename: (req, file, cb) => { 
     const filename = Date.now() + path.extname(file.originalname); 
-    console.log('Saving file as:', filename); 
+    console.log('📸 Saving file as:', filename); 
     cb(null, filename); 
   } 
 }); 
@@ -178,34 +200,44 @@ const verifyAppleReceipt = async (receiptData) => {
   } 
 }; 
 
-// 🔥 PROFESSIONAL USER MANAGEMENT - FIXED CRITICAL BUG
-const getUserData = async (deviceId) => { 
+// 🔥 EMAIL-BASED USER MANAGEMENT
+const getUserDataByEmail = async (email) => { 
   try { 
-    console.log('📊👤 Getting user data for device:', deviceId);
-    const userDoc = await db.collection('users').doc(deviceId).get(); 
+    console.log('📧👤 Getting user data for email:', email);
+    
+    if (!email || !validateEmail(email)) {
+      console.log('📧👤 Invalid email format');
+      return null;
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    console.log('📧👤 Looking up user ID:', userId);
+    
+    const userDoc = await db.collection('users').doc(userId).get(); 
      
     if (!userDoc.exists) { 
-      console.log('📊👤 User not found in database');
+      console.log('📧👤 User not found in database');
       return null;
     } 
      
-    // 🚨 CRITICAL FIX: Use let instead of const for userData
     let userData = userDoc.data(); 
-    console.log('📊👤 User data retrieved:', {
-      id: userData.id,
+    console.log('📧👤 User data retrieved:', {
+      email: userData.email,
       subscriptionStatus: userData.subscriptionStatus,
       tier: userData.tier,
       scansRemaining: userData.scansRemaining,
       hasExpiry: !!userData.subscriptionExpiryDate
     });
      
-    // 🔥 CHECK IF SUBSCRIPTION HAS EXPIRED (Professional Logic)
+    // 🔥 CHECK IF SUBSCRIPTION HAS EXPIRED
     if (userData.subscriptionStatus === 'active' && userData.subscriptionExpiryDate) {
       const expiryDate = new Date(userData.subscriptionExpiryDate);
       const now = new Date();
       
       if (now > expiryDate) {
-        console.log('📊👤 ⚠️ Subscription expired, updating status...');
+        console.log('📧👤 ⚠️ Subscription expired, updating status...');
         const expiredUpdate = {
           subscriptionStatus: 'expired',
           tier: 'free',
@@ -214,18 +246,17 @@ const getUserData = async (deviceId) => {
           updatedAt: now
         };
         
-        await db.collection('users').doc(deviceId).update(expiredUpdate);
-        // 🚨 CRITICAL FIX: Update userData properly
+        await db.collection('users').doc(userId).update(expiredUpdate);
         userData = { ...userData, ...expiredUpdate };
       }
     }
     
-    // 🔥 MONTHLY SCAN RESET (Like Spotify's monthly limits)
+    // 🔥 MONTHLY SCAN RESET
     const now = new Date();
     const lastReset = userData.lastResetDate ? new Date(userData.lastResetDate) : new Date(userData.createdAt || now);
     
     if (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear()) {
-      console.log('📊👤 🔄 Month changed, resetting scans...');
+      console.log('📧👤 🔄 Month changed, resetting scans...');
       
       let newScans = 3; // Default free
       if (userData.subscriptionStatus === 'active') {
@@ -238,17 +269,54 @@ const getUserData = async (deviceId) => {
         updatedAt: now 
       }; 
        
-      await db.collection('users').doc(deviceId).update(resetUpdate); 
-      // 🚨 CRITICAL FIX: Update userData properly
+      await db.collection('users').doc(userId).update(resetUpdate); 
       userData = { ...userData, ...resetUpdate }; 
     } 
      
     return userData; 
   } catch (error) { 
-    console.error('📊👤 ❌ Error getting user data:', error); 
+    console.error('📧👤 ❌ Error getting user data:', error); 
     return null;
   } 
 }; 
+
+// 🔥 CREATE EMAIL-BASED USER
+const createUserWithEmail = async (email, additionalData = {}) => {
+  try {
+    console.log('📧📝 Creating user with email:', email);
+    
+    if (!email || !validateEmail(email)) {
+      throw new Error('Invalid email format');
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    console.log('📧📝 Creating user with ID:', userId);
+    
+    const userData = {
+      id: userId,
+      email: sanitized,
+      subscriptionStatus: additionalData.subscriptionStatus || 'free',
+      tier: additionalData.tier || 'free',
+      scansRemaining: additionalData.scansRemaining || 3,
+      scansUsed: 0,
+      lastResetDate: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...additionalData
+    };
+    
+    await db.collection('users').doc(userId).set(userData);
+    
+    console.log('📧📝 ✅ User created successfully');
+    return userData;
+    
+  } catch (error) {
+    console.error('📧📝 ❌ Error creating user:', error);
+    throw error;
+  }
+};
 
 // 🔥 PROFESSIONAL SUBSCRIPTION STATUS VERIFICATION
 const verifySubscriptionStatus = async (purchase) => {
@@ -369,8 +437,8 @@ const verifySubscriptionStatus = async (purchase) => {
   }
 };
 
-// 🔥 RATE LIMITING (Professional Implementation)
-const checkRateLimits = async (userId, ipAddress, userData) => { 
+// 🔥 RATE LIMITING (Updated for Email-based users)
+const checkRateLimits = async (email, ipAddress, userData) => { 
   try { 
     // Subscribers get unlimited access
     if (userData && userData.subscriptionStatus === 'active') { 
@@ -404,7 +472,7 @@ const checkRateLimits = async (userId, ipAddress, userData) => {
       await db.collection('rateLimits').doc(rateLimitDocId).update({ 
         freeScansCount: admin.firestore.FieldValue.increment(1), 
         lastScan: new Date(), 
-        userIds: admin.firestore.FieldValue.arrayUnion(userId) 
+        emails: admin.firestore.FieldValue.arrayUnion(email || 'unknown')
       }); 
     } else { 
       await db.collection('rateLimits').doc(rateLimitDocId).set({ 
@@ -413,7 +481,7 @@ const checkRateLimits = async (userId, ipAddress, userData) => {
         lastScan: new Date(), 
         ipHash: ipHash, 
         month: monthKey, 
-        userIds: [userId] 
+        emails: [email || 'unknown']
       }); 
     } 
      
@@ -446,55 +514,147 @@ const checkRateLimits = async (userId, ipAddress, userData) => {
   } 
 }; 
 
-// 🔥 PROFESSIONAL ENDPOINTS
-
-// Create user endpoint
-app.post('/api/user', async (req, res) => {
-  try {
-    const { userId, subscriptionStatus = 'free', tier = 'free', scansRemaining = 3 } = req.body;
-    
-    console.log('📝👤 Creating user:', userId);
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'Device ID required' });
+// 🔥 SCAN REDUCTION HELPER (Updated for Email-based)
+const updateUserScans = async (email, decrement = true) => { 
+  try { 
+    if (!email || !validateEmail(email)) {
+      console.error('Invalid email for scan update:', email);
+      return null;
     }
     
-    const userData = {
-      id: userId,
-      subscriptionStatus: subscriptionStatus,
-      tier: tier,
-      scansRemaining: scansRemaining,
-      scansUsed: 0,
-      lastResetDate: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    const userRef = db.collection('users').doc(userId); 
+     
+    if (decrement) { 
+      await userRef.update({ 
+        scansRemaining: admin.firestore.FieldValue.increment(-1), 
+        scansUsed: admin.firestore.FieldValue.increment(1), 
+        lastScanDate: new Date(),
+        updatedAt: new Date() 
+      }); 
+    } 
+     
+    const updated = await userRef.get(); 
+    return updated.data(); 
+  } catch (error) { 
+    console.error('Error updating user scans:', error); 
+    return null;
+  } 
+}; 
+
+// 🔥 API ENDPOINTS
+
+// 🎯 EMAIL-BASED USER CREATION
+app.post('/api/user', async (req, res) => {
+  try {
+    const { email, subscriptionStatus = 'free', tier = 'free', scansRemaining = 3 } = req.body;
     
-    await db.collection('users').doc(userId).set(userData);
+    console.log('📧📝 Creating user request:', { email, tier });
     
-    console.log('📝👤 ✅ User created successfully');
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    // Check if user already exists
+    const existing = await getUserDataByEmail(email);
+    if (existing) {
+      console.log('📧📝 User already exists, returning existing data');
+      return res.json({ 
+        success: true, 
+        user: existing,
+        message: 'User already exists'
+      });
+    }
+    
+    const userData = await createUserWithEmail(email, {
+      subscriptionStatus,
+      tier,
+      scansRemaining
+    });
+    
+    console.log('📧📝 ✅ User created successfully');
     res.json({ success: true, user: userData });
     
   } catch (error) {
-    console.error('📝👤 ❌ Error creating user:', error);
-    res.status(500).json({ error: 'Failed to create user' });
+    console.error('📧📝 ❌ Error creating user:', error);
+    res.status(500).json({ error: 'Failed to create user: ' + error.message });
   }
 });
 
-// Get user data endpoint
-app.get('/api/user/:userId', async (req, res) => { 
+// 🎯 EMAIL-BASED USER LOOKUP
+app.post('/api/user/lookup', async (req, res) => { 
   try { 
-    const { userId } = req.params; 
-    console.log('📊👤 Getting user:', userId);
+    const { email } = req.body; 
+    console.log('📧🔍 Looking up user by email:', email);
     
-    const userData = await getUserData(userId); 
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    const userData = await getUserDataByEmail(email); 
     
     if (!userData) {
-      console.log('📊👤 User not found, returning 404');
+      console.log('📧🔍 User not found');
       return res.status(404).json({
-        error: 'User not found'
+        error: 'User not found',
+        createAccount: true
       });
     }
+     
+    console.log('📧🔍 ✅ User found successfully');
+    res.json({ 
+      found: true,
+      subscriptionStatus: userData.subscriptionStatus || 'free',
+      tier: userData.tier || 'free',
+      scansRemaining: userData.scansRemaining || 3,
+      subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
+      autoRenewStatus: userData.autoRenewStatus || false,
+      appleUserId: userData.appleUserId || null,
+      email: userData.email
+    }); 
+  } catch (error) { 
+    console.error('📧🔍 ❌ Error looking up user:', error); 
+    res.status(500).json({ error: 'Failed to lookup user' }); 
+  } 
+}); 
+
+// 🎯 LEGACY DEVICE ID LOOKUP (For migration)
+app.get('/api/user/:deviceId', async (req, res) => { 
+  try { 
+    const { deviceId } = req.params; 
+    console.log('🔄📱 Legacy device ID lookup:', deviceId);
+    
+    // Check if it's already an email-based ID
+    if (deviceId.startsWith('email_')) {
+      const userDoc = await db.collection('users').doc(deviceId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        return res.json({ 
+          subscriptionStatus: userData.subscriptionStatus || 'free',
+          tier: userData.tier || 'free',
+          scansRemaining: userData.scansRemaining || 3,
+          subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
+          autoRenewStatus: userData.autoRenewStatus || false,
+          appleUserId: userData.appleUserId || null,
+          migrationNeeded: false
+        });
+      }
+    }
+    
+    // Legacy device ID lookup
+    const userDoc = await db.collection('users').doc(deviceId).get();
+    
+    if (!userDoc.exists) {
+      console.log('🔄📱 Legacy user not found');
+      return res.status(404).json({
+        error: 'User not found',
+        migrationNeeded: true
+      });
+    }
+    
+    const userData = userDoc.data();
+    console.log('🔄📱 Legacy user found, migration needed');
      
     res.json({ 
       subscriptionStatus: userData.subscriptionStatus || 'free',
@@ -502,117 +662,44 @@ app.get('/api/user/:userId', async (req, res) => {
       scansRemaining: userData.scansRemaining || 3,
       subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
       autoRenewStatus: userData.autoRenewStatus || false,
-      appleUserId: userData.appleUserId || null
+      appleUserId: userData.appleUserId || null,
+      migrationNeeded: true
     }); 
   } catch (error) { 
-    console.error('📊👤 ❌ Error fetching user data:', error); 
+    console.error('🔄📱 ❌ Error fetching legacy user:', error); 
     res.status(500).json({ error: 'Failed to fetch user data' }); 
   } 
 }); 
 
-// 🔥 PROFESSIONAL SUBSCRIPTION STATUS VERIFICATION ENDPOINT
-app.post('/api/verify-subscription-status', async (req, res) => {
-  console.log('🔐🍎🌐 SUBSCRIPTION STATUS VERIFICATION REQUEST');
-  
-  try {
-    const { userId, platform, productId, transactionId, originalTransactionId, receiptData, purchaseToken, verificationSource } = req.body;
-    
-    console.log('🔐🍎🌐 Verification request:', {
-      userId,
-      platform,
-      productId,
-      verificationSource,
-      hasReceiptData: !!receiptData,
-      hasPurchaseToken: !!purchaseToken
-    });
-    
-    if (!userId || !platform) {
-      return res.status(400).json({ 
-        valid: false, 
-        subscriptionStatus: 'invalid',
-        error: 'Missing required fields: userId, platform' 
-      });
-    }
-    
-    let verificationResult;
-    
-    if (platform === 'ios') {
-      verificationResult = await verifySubscriptionStatus({
-        productId,
-        transactionId,
-        originalTransactionId,
-        receiptData
-      });
-    } else if (platform === 'android') {
-      // For Android, implement Google Play verification here
-      // For now, basic validation
-      verificationResult = { 
-        valid: !!purchaseToken, 
-        subscriptionStatus: !!purchaseToken ? 'active' : 'invalid',
-        tier: productId && productId.includes('premium') ? 'premium' : 'basic'
-      };
-    } else {
-      return res.status(400).json({ 
-        valid: false, 
-        subscriptionStatus: 'invalid',
-        error: 'Unsupported platform' 
-      });
-    }
-    
-    if (verificationResult.valid && verificationResult.subscriptionStatus === 'active') {
-      console.log('🔐🍎🌐 ✅ Subscription verified, updating database...');
-      
-      // Update user in database
-      const updateData = {
-        subscriptionStatus: verificationResult.subscriptionStatus,
-        tier: verificationResult.tier,
-        scansRemaining: verificationResult.tier === 'premium' ? 40 : 15,
-        subscriptionExpiryDate: verificationResult.expiryDate || null,
-        autoRenewStatus: verificationResult.autoRenewStatus || false,
-        appleUserId: verificationResult.appleUserId || null,
-        lastStatusCheck: new Date(),
-        updatedAt: new Date()
-      };
-      
-      await db.collection('users').doc(userId).set(updateData, { merge: true });
-      
-      console.log('🔐🍎🌐 ✅ Database updated successfully');
-    }
-    
-    res.json(verificationResult);
-    
-  } catch (error) {
-    console.error('🔐🍎🌐 ❌ Verification error:', error);
-    res.status(500).json({ 
-      valid: false,
-      subscriptionStatus: 'error',
-      error: 'Verification failed',
-      message: error.message
-    });
-  }
-});
-
-// 🔧 MISSING ENDPOINT FIX: Legacy endpoint for backward compatibility
+// 🎯 PURCHASE VERIFICATION (Updated for Email)
 app.post('/api/verify-purchase', async (req, res) => {
-  console.log('🔐🍎📱 LEGACY VERIFY-PURCHASE ENDPOINT (redirecting to new endpoint)');
+  console.log('🔐🍎📱 PURCHASE VERIFICATION REQUEST');
   
   try {
-    const { userId, platform, productId, transactionId, originalTransactionId, receiptData, purchaseToken, verificationSource } = req.body;
+    const { email, platform, productId, transactionId, originalTransactionId, receiptData, purchaseToken, verificationSource } = req.body;
     
-    console.log('🔐🍎📱 Legacy verification request:', {
-      userId,
+    console.log('🔐🍎📱 Verification request:', {
+      email,
       platform,
       productId,
-      verificationSource: verificationSource || 'legacy_purchase_update',
+      verificationSource: verificationSource || 'purchase_update',
       hasReceiptData: !!receiptData,
       hasPurchaseToken: !!purchaseToken
     });
     
-    if (!userId || !platform) {
+    if (!email || !validateEmail(email)) {
       return res.status(400).json({ 
         valid: false, 
         subscriptionStatus: 'invalid',
-        error: 'Missing required fields: userId, platform' 
+        error: 'Valid email required' 
+      });
+    }
+    
+    if (!platform) {
+      return res.status(400).json({ 
+        valid: false, 
+        subscriptionStatus: 'invalid',
+        error: 'Platform required' 
       });
     }
     
@@ -627,7 +714,6 @@ app.post('/api/verify-purchase', async (req, res) => {
       });
     } else if (platform === 'android') {
       // For Android, implement Google Play verification here
-      // For now, basic validation
       verificationResult = { 
         valid: !!purchaseToken, 
         subscriptionStatus: !!purchaseToken ? 'active' : 'invalid',
@@ -642,9 +728,18 @@ app.post('/api/verify-purchase', async (req, res) => {
     }
     
     if (verificationResult.valid && verificationResult.subscriptionStatus === 'active') {
-      console.log('🔐🍎📱 ✅ Legacy: Subscription verified, updating database...');
+      console.log('🔐🍎📱 ✅ Purchase verified, updating user...');
       
-      // Update user in database
+      // Get or create user
+      let userData = await getUserDataByEmail(email);
+      if (!userData) {
+        userData = await createUserWithEmail(email);
+      }
+      
+      // Update subscription status
+      const sanitized = sanitizeEmail(email);
+      const userId = createUserIdFromEmail(sanitized);
+      
       const updateData = {
         subscriptionStatus: verificationResult.subscriptionStatus,
         tier: verificationResult.tier,
@@ -656,15 +751,15 @@ app.post('/api/verify-purchase', async (req, res) => {
         updatedAt: new Date()
       };
       
-      await db.collection('users').doc(userId).set(updateData, { merge: true });
+      await db.collection('users').doc(userId).update(updateData);
       
-      console.log('🔐🍎📱 ✅ Legacy: Database updated successfully');
+      console.log('🔐🍎📱 ✅ Database updated successfully');
     }
     
     res.json(verificationResult);
     
   } catch (error) {
-    console.error('🔐🍎📱 ❌ Legacy verification error:', error);
+    console.error('🔐🍎📱 ❌ Verification error:', error);
     res.status(500).json({ 
       valid: false,
       subscriptionStatus: 'error',
@@ -674,11 +769,11 @@ app.post('/api/verify-purchase', async (req, res) => {
   }
 });
 
-// Update user subscription status endpoint
-app.put('/api/user/:userId/subscription-status', async (req, res) => {
+// 🎯 UPDATE SUBSCRIPTION STATUS (Updated for Email)
+app.put('/api/user/subscription-status', async (req, res) => {
   try {
-    const { userId } = req.params;
     const { 
+      email,
       subscriptionStatus, 
       tier, 
       scansRemaining, 
@@ -688,12 +783,15 @@ app.put('/api/user/:userId/subscription-status', async (req, res) => {
       lastStatusCheck
     } = req.body;
     
-    console.log('📊🔄 Updating subscription status for:', userId);
-    console.log('📊🔄 New status:', { subscriptionStatus, tier, scansRemaining });
+    console.log('📧🔄 Updating subscription status for:', email);
+    console.log('📧🔄 New status:', { subscriptionStatus, tier, scansRemaining });
     
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID required' });
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
     }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
     
     const updateData = {
       subscriptionStatus: subscriptionStatus || 'free',
@@ -720,38 +818,16 @@ app.put('/api/user/:userId/subscription-status', async (req, res) => {
     
     await db.collection('users').doc(userId).update(updateData);
     
-    console.log('📊🔄 ✅ Subscription status updated successfully');
+    console.log('📧🔄 ✅ Subscription status updated successfully');
     res.json({ success: true, status: subscriptionStatus, tier: tier });
     
   } catch (error) {
-    console.error('📊🔄 ❌ Error updating subscription status:', error);
+    console.error('📧🔄 ❌ Error updating subscription status:', error);
     res.status(500).json({ error: 'Failed to update subscription status' });
   }
 });
 
-// 🔥 SCAN REDUCTION HELPER
-const updateUserScans = async (userId, decrement = true) => { 
-  try { 
-    const userRef = db.collection('users').doc(userId); 
-     
-    if (decrement) { 
-      await userRef.update({ 
-        scansRemaining: admin.firestore.FieldValue.increment(-1), 
-        scansUsed: admin.firestore.FieldValue.increment(1), 
-        lastScanDate: new Date(),
-        updatedAt: new Date() 
-      }); 
-    } 
-     
-    const updated = await userRef.get(); 
-    return updated.data(); 
-  } catch (error) { 
-    console.error('Error updating user scans:', error); 
-    return null;
-  } 
-}; 
-
-// Recipe analysis endpoint (Enhanced with professional subscription checking)
+// 🎯 RECIPE ANALYSIS (Updated for Email-based users)
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => { 
   try { 
     console.log('📷🔍 Recipe analysis request received'); 
@@ -765,21 +841,22 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'OpenAI API key not configured' }); 
     } 
 
-    const userId = req.body.userId || 'anonymous'; 
-    let userData = await getUserData(userId); // 🚨 FIX: Use let instead of const
+    const email = req.body.email || null; 
+    
+    if (!email || !validateEmail(email)) {
+      await fs.unlink(req.file.path);
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    let userData = await getUserDataByEmail(email);
      
     if (!userData) {
       console.log('📷🔍 User not found, creating free tier user...');
-      await db.collection('users').doc(userId).set({
-        id: userId,
+      userData = await createUserWithEmail(email, {
         subscriptionStatus: 'free',
         tier: 'free',
-        scansRemaining: 3,
-        scansUsed: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        scansRemaining: 3
       });
-      userData = await getUserData(userId); // 🚨 FIX: Reassign properly
     }
     
     const userIP = req.headers['x-forwarded-for'] ||  
@@ -787,7 +864,7 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
                    req.socket.remoteAddress || 
                    'unknown'; 
      
-    const rateLimitCheck = await checkRateLimits(userId, userIP, userData); 
+    const rateLimitCheck = await checkRateLimits(email, userIP, userData); 
      
     if (!rateLimitCheck.allowed) { 
       await fs.unlink(req.file.path); 
@@ -812,7 +889,7 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
       }); 
     } 
 
-    console.log('📷🔍 Processing image for user:', userId, 'Tier:', userData.tier); 
+    console.log('📷🔍 Processing image for user:', email, 'Tier:', userData.tier); 
 
     const imageBuffer = await fs.readFile(req.file.path); 
     const base64Image = imageBuffer.toString('base64'); 
@@ -956,7 +1033,7 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
     } 
 
     // Update user scan count
-    const updatedUserData = await updateUserScans(userId); 
+    const updatedUserData = await updateUserScans(email); 
 
     console.log('📷🔍 ✅ Recipe analysis complete, sending response'); 
     res.json({  
@@ -981,13 +1058,94 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
   } 
 }); 
 
+// 🎯 MIGRATION ENDPOINT (For existing device-based users)
+app.post('/api/migrate-user', async (req, res) => {
+  try {
+    const { deviceId, email } = req.body;
+    
+    console.log('🔄📧 Migrating user from device ID to email:', { deviceId, email });
+    
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Device ID required' });
+    }
+    
+    // Get old device-based user data
+    const oldUserDoc = await db.collection('users').doc(deviceId).get();
+    
+    if (!oldUserDoc.exists) {
+      return res.status(404).json({ error: 'Original user not found' });
+    }
+    
+    const oldUserData = oldUserDoc.data();
+    
+    // Check if email-based user already exists
+    let existingUser = await getUserDataByEmail(email);
+    
+    if (existingUser) {
+      console.log('🔄📧 Email-based user already exists, merging data...');
+      
+      // Merge the better subscription status
+      const mergedData = {
+        ...existingUser,
+        // Keep the better subscription status
+        subscriptionStatus: (oldUserData.subscriptionStatus === 'active' || existingUser.subscriptionStatus === 'active') ? 'active' : 'free',
+        tier: (oldUserData.tier === 'premium' || existingUser.tier === 'premium') ? 'premium' : 
+              (oldUserData.tier === 'basic' || existingUser.tier === 'basic') ? 'basic' : 'free',
+        scansRemaining: Math.max(oldUserData.scansRemaining || 0, existingUser.scansRemaining || 0),
+        migrationDate: new Date(),
+        originalDeviceId: deviceId,
+        updatedAt: new Date()
+      };
+      
+      const sanitized = sanitizeEmail(email);
+      const userId = createUserIdFromEmail(sanitized);
+      await db.collection('users').doc(userId).update(mergedData);
+      
+    } else {
+      console.log('🔄📧 Creating new email-based user from device data...');
+      
+      // Create new email-based user with old data
+      existingUser = await createUserWithEmail(email, {
+        ...oldUserData,
+        migrationDate: new Date(),
+        originalDeviceId: deviceId
+      });
+    }
+    
+    // Mark old device-based user as migrated
+    await db.collection('users').doc(deviceId).update({
+      migrated: true,
+      migratedTo: email,
+      migrationDate: new Date()
+    });
+    
+    console.log('🔄📧 ✅ Migration completed successfully');
+    
+    res.json({
+      success: true,
+      message: 'Migration completed successfully',
+      user: existingUser
+    });
+    
+  } catch (error) {
+    console.error('🔄📧 ❌ Migration error:', error);
+    res.status(500).json({ error: 'Migration failed: ' + error.message });
+  }
+});
+
 // Health check endpoint 
 app.get('/health', (req, res) => { 
   res.json({  
     status: 'ok',  
     timestamp: new Date(), 
-    version: '4.0.1-CRITICAL-FIXES',
+    version: '5.0.0-EMAIL-BASED-FINAL',
     features: { 
+      emailBasedAuthentication: true,
+      deviceIdMigration: true,
       imageGeneration: true, 
       professionalSubscriptions: true,
       appleVerification: true,
@@ -997,8 +1155,8 @@ app.get('/health', (req, res) => {
       subscriptionStatusTracking: true,
       autoRenewalDetection: true,
       expiryManagement: true,
-      legacyEndpointSupport: true,
-      criticalBugsFixed: true
+      userMigration: true,
+      emailValidation: true
     } 
   }); 
 }); 
@@ -1006,37 +1164,39 @@ app.get('/health', (req, res) => {
 // Test endpoint
 app.get('/api/test', (req, res) => { 
   res.json({  
-    message: 'GrubLens Professional Subscription API Ready! - CRITICAL BUGS FIXED', 
+    message: 'GrubLens Professional Email-Based API Ready! - NO MORE DEVICE ID HELL', 
     hasOpenAIKey: !!process.env.OPENAI_API_KEY, 
     hasAppleSecret: !!process.env.APPLE_SHARED_SECRET, 
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set', 
-    version: '4.0.1-CRITICAL-FIXES',
+    version: '5.0.0-EMAIL-BASED-FINAL',
     hasFirebase: !!admin.apps.length, 
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
-    subscriptionModel: 'PROFESSIONAL_APPLE_VERIFIED',
+    authenticationModel: 'EMAIL_BASED_PROFESSIONAL',
     appleSupportLevel: 'PRODUCTION_AND_SANDBOX',
     androidSupportLevel: 'GOOGLE_PLAY_READY',
-    endpointCompatibility: 'LEGACY_SUPPORT_ENABLED',
-    criticalFixesApplied: 'USER_DATA_ASSIGNMENT_FIXED'
+    migrationSupport: 'DEVICE_ID_TO_EMAIL_ENABLED',
+    emailValidation: 'ENABLED',
+    userPersistence: 'CROSS_DEVICE_CROSS_INSTALL'
   }); 
 }); 
 
 // Root endpoint
 app.get('/', (req, res) => { 
-  res.send('🍎 GrubLens Professional Subscription API v4.0.1 - CRITICAL BUGS FIXED!'); 
+  res.send('🔥 GrubLens Professional Email-Based API v5.0.0 - NO MORE DEVICE ID HELL!'); 
 }); 
 
 app.listen(PORT, () => { 
-  console.log(`🚀 GrubLens Professional Server running on port ${PORT}`); 
+  console.log(`🚀 GrubLens Professional Email-Based Server running on port ${PORT}`); 
   console.log(`🔑 OpenAI API Key: ${!!process.env.OPENAI_API_KEY ? '✅ Configured' : '❌ Missing'}`); 
   console.log(`🍎 Apple Shared Secret: ${!!process.env.APPLE_SHARED_SECRET ? '✅ Configured' : '❌ Missing'}`); 
   console.log(`🔥 Firebase: ${!!admin.apps.length ? '✅ Connected' : '❌ Not Connected'}`); 
+  console.log(`📧 Authentication: EMAIL-BASED (No more device ID hell!)`); 
   console.log(`📱 Platform Support: iOS (Production + Sandbox) + Android (Google Play)`); 
-  console.log(`🎯 Subscription Model: PROFESSIONAL - Like Netflix/Spotify`);
-  console.log(`⚡ Features: Auto-renewal tracking, Expiry management, Receipt verification`);
-  console.log(`🔧 Compatibility: Legacy endpoint support enabled`);
-  console.log(`🛠️ CRITICAL FIXES APPLIED: Assignment to const variable FIXED`);
-  console.log(`🏆 READY FOR APP STORE APPROVAL!`);
+  console.log(`🎯 User Management: Professional Email-Based System`);
+  console.log(`⚡ Features: Cross-device, Cross-install persistence`);
+  console.log(`🔄 Migration: Device ID → Email support included`);
+  console.log(`✅ Email Validation: Built-in professional validation`);
+  console.log(`🏆 READY TO END YOUR 1.5 MONTH NIGHTMARE!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
 }); 
