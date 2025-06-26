@@ -78,6 +78,35 @@ async function uploadImageToFirebase(imageUrl, recipeName) {
   } 
 } 
 
+// 🔥 NEW: Function to upload user's grocery image to Firebase
+async function uploadGroceryImageToFirebase(imagePath, userEmail) {
+  try {
+    console.log('📸🔥 Uploading grocery image to Firebase for user:', userEmail);
+    
+    const imageBuffer = await fs.readFile(imagePath);
+    const timestamp = Date.now();
+    const emailHash = crypto.createHash('md5').update(userEmail).digest('hex').substring(0, 8);
+    const fileName = `grocery-images/${emailHash}/${timestamp}.jpg`;
+    const file = bucket.file(fileName);
+    
+    await file.save(imageBuffer, {
+      metadata: {
+        contentType: 'image/jpeg',
+      },
+    });
+    
+    await file.makePublic();
+    
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    console.log('📸🔥 ✅ Grocery image uploaded successfully:', publicUrl);
+    
+    return publicUrl;
+  } catch (error) {
+    console.error('📸🔥 ❌ Error uploading grocery image:', error);
+    return null;
+  }
+}
+
 const app = express(); 
 const PORT = process.env.PORT || 3000; 
 
@@ -827,7 +856,7 @@ app.put('/api/user/subscription-status', async (req, res) => {
   }
 });
 
-// 🎯 RECIPE ANALYSIS (Updated for Email-based users)
+// 🎯 RECIPE ANALYSIS (Updated to save analyzed image to Firebase)
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => { 
   try { 
     console.log('📷🔍 Recipe analysis request received'); 
@@ -890,6 +919,9 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     } 
 
     console.log('📷🔍 Processing image for user:', email, 'Tier:', userData.tier); 
+
+    // 🔥 NEW: Upload grocery image to Firebase
+    const groceryImageUrl = await uploadGroceryImageToFirebase(req.file.path, email);
 
     const imageBuffer = await fs.readFile(req.file.path); 
     const base64Image = imageBuffer.toString('base64'); 
@@ -1038,6 +1070,7 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
     console.log('📷🔍 ✅ Recipe analysis complete, sending response'); 
     res.json({  
       recipes, 
+      analyzedImageUrl: groceryImageUrl, // 🔥 NEW: Return the Firebase URL for the analyzed image
       scansRemaining: updatedUserData ? updatedUserData.scansRemaining : userData.scansRemaining - 1, 
       subscriptionStatus: userData.subscriptionStatus,
       tier: userData.tier,
@@ -1057,6 +1090,123 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
     }); 
   } 
 }); 
+
+// 🔥 NEW: SAVE RECIPE HISTORY ENDPOINT
+app.post('/api/user/history', async (req, res) => {
+  try {
+    const { email, historyItem } = req.body;
+    
+    console.log('📜💾 Saving history for user:', email);
+    
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    if (!historyItem) {
+      return res.status(400).json({ error: 'History item required' });
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    // Get current history
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data() || {};
+    const currentHistory = userData.recipeHistory || [];
+    
+    // Add new item and limit to 50
+    const updatedHistory = [historyItem, ...currentHistory].slice(0, 50);
+    
+    // Update user document
+    await db.collection('users').doc(userId).update({
+      recipeHistory: updatedHistory,
+      updatedAt: new Date()
+    });
+    
+    console.log('📜💾 ✅ History saved successfully');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('📜💾 ❌ Error saving history:', error);
+    res.status(500).json({ error: 'Failed to save history' });
+  }
+});
+
+// 🔥 NEW: GET RECIPE HISTORY ENDPOINT
+app.get('/api/user/history/:email', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email);
+    
+    console.log('📜📱 Loading history for user:', email);
+    
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data() || {};
+    
+    console.log('📜📱 ✅ History loaded, items:', userData.recipeHistory?.length || 0);
+    res.json({ history: userData.recipeHistory || [] });
+  } catch (error) {
+    console.error('📜📱 ❌ Error loading history:', error);
+    res.status(500).json({ error: 'Failed to load history' });
+  }
+});
+
+// 🔥 NEW: SAVE FAVORITES ENDPOINT
+app.post('/api/user/favorites', async (req, res) => {
+  try {
+    const { email, favorites } = req.body;
+    
+    console.log('⭐💾 Saving favorites for user:', email);
+    
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    await db.collection('users').doc(userId).update({
+      favorites: favorites || [],
+      updatedAt: new Date()
+    });
+    
+    console.log('⭐💾 ✅ Favorites saved successfully');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('⭐💾 ❌ Error saving favorites:', error);
+    res.status(500).json({ error: 'Failed to save favorites' });
+  }
+});
+
+// 🔥 NEW: GET FAVORITES ENDPOINT
+app.get('/api/user/favorites/:email', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email);
+    
+    console.log('⭐📱 Loading favorites for user:', email);
+    
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    
+    const sanitized = sanitizeEmail(email);
+    const userId = createUserIdFromEmail(sanitized);
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data() || {};
+    
+    console.log('⭐📱 ✅ Favorites loaded, items:', userData.favorites?.length || 0);
+    res.json({ favorites: userData.favorites || [] });
+  } catch (error) {
+    console.error('⭐📱 ❌ Error loading favorites:', error);
+    res.status(500).json({ error: 'Failed to load favorites' });
+  }
+});
 
 // 🎯 MIGRATION ENDPOINT (For existing device-based users)
 app.post('/api/migrate-user', async (req, res) => {
@@ -1156,7 +1306,10 @@ app.get('/health', (req, res) => {
       autoRenewalDetection: true,
       expiryManagement: true,
       userMigration: true,
-      emailValidation: true
+      emailValidation: true,
+      historySync: true,
+      favoritesSync: true,
+      groceryImageStorage: true
     } 
   }); 
 }); 
@@ -1176,7 +1329,10 @@ app.get('/api/test', (req, res) => {
     androidSupportLevel: 'GOOGLE_PLAY_READY',
     migrationSupport: 'DEVICE_ID_TO_EMAIL_ENABLED',
     emailValidation: 'ENABLED',
-    userPersistence: 'CROSS_DEVICE_CROSS_INSTALL'
+    userPersistence: 'CROSS_DEVICE_CROSS_INSTALL',
+    historySupport: 'FIREBASE_SYNC_ENABLED',
+    favoritesSupport: 'FIREBASE_SYNC_ENABLED',
+    groceryImageStorage: 'FIREBASE_PERMANENT_STORAGE'
   }); 
 }); 
 
@@ -1196,6 +1352,9 @@ app.listen(PORT, () => {
   console.log(`⚡ Features: Cross-device, Cross-install persistence`);
   console.log(`🔄 Migration: Device ID → Email support included`);
   console.log(`✅ Email Validation: Built-in professional validation`);
+  console.log(`📜 History Sync: Firebase-backed history across devices`);
+  console.log(`⭐ Favorites Sync: Firebase-backed favorites across devices`);
+  console.log(`📸 Image Storage: Permanent Firebase storage for all images`);
   console.log(`🏆 READY TO END YOUR 1.5 MONTH NIGHTMARE!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
