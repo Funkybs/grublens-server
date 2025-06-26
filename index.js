@@ -275,7 +275,7 @@ const getUserDataByEmail = async (email) => {
           updatedAt: now
         };
         
-        await db.collection('users').doc(userId).update(expiredUpdate);
+        await db.collection('users').doc(userId).set(expiredUpdate, { merge: true });
         userData = { ...userData, ...expiredUpdate };
       }
     }
@@ -298,7 +298,7 @@ const getUserDataByEmail = async (email) => {
         updatedAt: now 
       }; 
        
-      await db.collection('users').doc(userId).update(resetUpdate); 
+      await db.collection('users').doc(userId).set(resetUpdate, { merge: true }); 
       userData = { ...userData, ...resetUpdate }; 
     } 
      
@@ -333,6 +333,8 @@ const createUserWithEmail = async (email, additionalData = {}) => {
       lastResetDate: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
+      recipeHistory: [],  // Initialize empty arrays
+      favorites: [],      // Initialize empty arrays
       ...additionalData
     };
     
@@ -498,11 +500,11 @@ const checkRateLimits = async (email, ipAddress, userData) => {
      
     // Update count
     if (rateLimitDoc.exists) { 
-      await db.collection('rateLimits').doc(rateLimitDocId).update({ 
+      await db.collection('rateLimits').doc(rateLimitDocId).set({ 
         freeScansCount: admin.firestore.FieldValue.increment(1), 
         lastScan: new Date(), 
         emails: admin.firestore.FieldValue.arrayUnion(email || 'unknown')
-      }); 
+      }, { merge: true }); 
     } else { 
       await db.collection('rateLimits').doc(rateLimitDocId).set({ 
         freeScansCount: 1, 
@@ -556,12 +558,12 @@ const updateUserScans = async (email, decrement = true) => {
     const userRef = db.collection('users').doc(userId); 
      
     if (decrement) { 
-      await userRef.update({ 
+      await userRef.set({ 
         scansRemaining: admin.firestore.FieldValue.increment(-1), 
         scansUsed: admin.firestore.FieldValue.increment(1), 
         lastScanDate: new Date(),
         updatedAt: new Date() 
-      }); 
+      }, { merge: true }); 
     } 
      
     const updated = await userRef.get(); 
@@ -780,7 +782,7 @@ app.post('/api/verify-purchase', async (req, res) => {
         updatedAt: new Date()
       };
       
-      await db.collection('users').doc(userId).update(updateData);
+      await db.collection('users').doc(userId).set(updateData, { merge: true });
       
       console.log('🔐🍎📱 ✅ Database updated successfully');
     }
@@ -845,7 +847,7 @@ app.put('/api/user/subscription-status', async (req, res) => {
       updateData.lastStatusCheck = new Date(lastStatusCheck);
     }
     
-    await db.collection('users').doc(userId).update(updateData);
+    await db.collection('users').doc(userId).set(updateData, { merge: true });
     
     console.log('📧🔄 ✅ Subscription status updated successfully');
     res.json({ success: true, status: subscriptionStatus, tier: tier });
@@ -1097,6 +1099,7 @@ app.post('/api/user/history', async (req, res) => {
     const { email, historyItem } = req.body;
     
     console.log('📜💾 Saving history for user:', email);
+    console.log('📜💾 History item ID:', historyItem?.id);
     
     if (!email || !validateEmail(email)) {
       return res.status(400).json({ error: 'Valid email required' });
@@ -1108,26 +1111,28 @@ app.post('/api/user/history', async (req, res) => {
     
     const sanitized = sanitizeEmail(email);
     const userId = createUserIdFromEmail(sanitized);
+    console.log('📜💾 User ID for save:', userId);
     
     // Get current history
     const userDoc = await db.collection('users').doc(userId).get();
     const userData = userDoc.data() || {};
     const currentHistory = userData.recipeHistory || [];
+    console.log('📜💾 Current history length:', currentHistory.length);
     
     // Add new item and limit to 50
     const updatedHistory = [historyItem, ...currentHistory].slice(0, 50);
     
-    // Update user document
-    await db.collection('users').doc(userId).update({
+    // Update user document - FIXED: Using set with merge to create if doesn't exist
+    await db.collection('users').doc(userId).set({
       recipeHistory: updatedHistory,
       updatedAt: new Date()
-    });
+    }, { merge: true });
     
-    console.log('📜💾 ✅ History saved successfully');
+    console.log('📜💾 ✅ History saved successfully, new length:', updatedHistory.length);
     res.json({ success: true });
   } catch (error) {
     console.error('📜💾 ❌ Error saving history:', error);
-    res.status(500).json({ error: 'Failed to save history' });
+    res.status(500).json({ error: 'Failed to save history: ' + error.message });
   }
 });
 
@@ -1144,15 +1149,23 @@ app.get('/api/user/history/:email', async (req, res) => {
     
     const sanitized = sanitizeEmail(email);
     const userId = createUserIdFromEmail(sanitized);
+    console.log('📜📱 User ID for load:', userId);
     
     const userDoc = await db.collection('users').doc(userId).get();
-    const userData = userDoc.data() || {};
     
-    console.log('📜📱 ✅ History loaded, items:', userData.recipeHistory?.length || 0);
-    res.json({ history: userData.recipeHistory || [] });
+    if (!userDoc.exists) {
+      console.log('📜📱 User document does not exist, returning empty history');
+      return res.json({ history: [] });
+    }
+    
+    const userData = userDoc.data() || {};
+    const history = userData.recipeHistory || [];
+    
+    console.log('📜📱 ✅ History loaded, items:', history.length);
+    res.json({ history: history });
   } catch (error) {
     console.error('📜📱 ❌ Error loading history:', error);
-    res.status(500).json({ error: 'Failed to load history' });
+    res.status(500).json({ error: 'Failed to load history: ' + error.message });
   }
 });
 
@@ -1162,6 +1175,7 @@ app.post('/api/user/favorites', async (req, res) => {
     const { email, favorites } = req.body;
     
     console.log('⭐💾 Saving favorites for user:', email);
+    console.log('⭐💾 Favorites count:', favorites?.length || 0);
     
     if (!email || !validateEmail(email)) {
       return res.status(400).json({ error: 'Valid email required' });
@@ -1169,17 +1183,19 @@ app.post('/api/user/favorites', async (req, res) => {
     
     const sanitized = sanitizeEmail(email);
     const userId = createUserIdFromEmail(sanitized);
+    console.log('⭐💾 User ID for save:', userId);
     
-    await db.collection('users').doc(userId).update({
+    // FIXED: Using set with merge to create if doesn't exist
+    await db.collection('users').doc(userId).set({
       favorites: favorites || [],
       updatedAt: new Date()
-    });
+    }, { merge: true });
     
     console.log('⭐💾 ✅ Favorites saved successfully');
     res.json({ success: true });
   } catch (error) {
     console.error('⭐💾 ❌ Error saving favorites:', error);
-    res.status(500).json({ error: 'Failed to save favorites' });
+    res.status(500).json({ error: 'Failed to save favorites: ' + error.message });
   }
 });
 
@@ -1196,15 +1212,23 @@ app.get('/api/user/favorites/:email', async (req, res) => {
     
     const sanitized = sanitizeEmail(email);
     const userId = createUserIdFromEmail(sanitized);
+    console.log('⭐📱 User ID for load:', userId);
     
     const userDoc = await db.collection('users').doc(userId).get();
-    const userData = userDoc.data() || {};
     
-    console.log('⭐📱 ✅ Favorites loaded, items:', userData.favorites?.length || 0);
-    res.json({ favorites: userData.favorites || [] });
+    if (!userDoc.exists) {
+      console.log('⭐📱 User document does not exist, returning empty favorites');
+      return res.json({ favorites: [] });
+    }
+    
+    const userData = userDoc.data() || {};
+    const favorites = userData.favorites || [];
+    
+    console.log('⭐📱 ✅ Favorites loaded, items:', favorites.length);
+    res.json({ favorites: favorites });
   } catch (error) {
     console.error('⭐📱 ❌ Error loading favorites:', error);
-    res.status(500).json({ error: 'Failed to load favorites' });
+    res.status(500).json({ error: 'Failed to load favorites: ' + error.message });
   }
 });
 
@@ -1253,7 +1277,7 @@ app.post('/api/migrate-user', async (req, res) => {
       
       const sanitized = sanitizeEmail(email);
       const userId = createUserIdFromEmail(sanitized);
-      await db.collection('users').doc(userId).update(mergedData);
+      await db.collection('users').doc(userId).set(mergedData, { merge: true });
       
     } else {
       console.log('🔄📧 Creating new email-based user from device data...');
@@ -1267,11 +1291,11 @@ app.post('/api/migrate-user', async (req, res) => {
     }
     
     // Mark old device-based user as migrated
-    await db.collection('users').doc(deviceId).update({
+    await db.collection('users').doc(deviceId).set({
       migrated: true,
       migratedTo: email,
       migrationDate: new Date()
-    });
+    }, { merge: true });
     
     console.log('🔄📧 ✅ Migration completed successfully');
     
