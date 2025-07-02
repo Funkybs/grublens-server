@@ -280,12 +280,14 @@ const getUserDataByEmail = async (email) => {
       }
     }
     
-    // 🔥 MONTHLY SCAN RESET
+    // 🔥 MONTHLY SCAN RESET - FIXED TO REQUIRE 28+ DAYS
     const now = new Date();
     const lastReset = userData.lastResetDate ? new Date(userData.lastResetDate) : new Date(userData.createdAt || now);
+    const daysSinceReset = Math.floor((now - lastReset) / (1000 * 60 * 60 * 24));
     
-    if (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear()) {
-      console.log('📧👤 🔄 Month changed, resetting scans...');
+    // Only reset if it's been at least 28 days AND the month changed
+    if (daysSinceReset >= 28 && (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear())) {
+      console.log(`📧👤 🔄 Monthly reset triggered after ${daysSinceReset} days`);
       
       let newScans = 3; // Default free
       if (userData.subscriptionStatus === 'active') {
