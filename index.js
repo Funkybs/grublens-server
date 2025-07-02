@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin'); 
 
 console.log('🔥 GRUBLENS PROFESSIONAL BACKEND - EMAIL BASED AUTHENTICATION');
-console.log('🔥 Version: 5.0.0 - FINAL FIX - NO MORE DEVICE ID HELL');
+console.log('🔥 Version: 5.0.1 - PRODUCTION HOTFIX');
 console.log('🔥 Startup Time:', new Date().toISOString());
 
 // 🎯 EMAIL VALIDATION UTILITY
@@ -545,7 +545,7 @@ const checkRateLimits = async (email, ipAddress, userData) => {
   } 
 }; 
 
-// 🔥 SCAN REDUCTION HELPER (Updated for Email-based)
+// 🔥 CRITICAL FIX: SCAN REDUCTION HELPER - MANUAL CALCULATION
 const updateUserScans = async (email, decrement = true) => { 
   try { 
     if (!email || !validateEmail(email)) {
@@ -556,18 +556,39 @@ const updateUserScans = async (email, decrement = true) => {
     const sanitized = sanitizeEmail(email);
     const userId = createUserIdFromEmail(sanitized);
     const userRef = db.collection('users').doc(userId); 
-     
+    
+    // Get current data first
+    const doc = await userRef.get();
+    if (!doc.exists) {
+      console.error('User document not found for scan update');
+      return null;
+    }
+    
+    const currentData = doc.data();
+    
     if (decrement) { 
+      // MANUALLY CALCULATE instead of using increment
+      const newScansRemaining = Math.max(0, (currentData.scansRemaining || 0) - 1);
+      const newScansUsed = (currentData.scansUsed || 0) + 1;
+      
+      console.log(`📱 Updating scans for ${email}: ${currentData.scansRemaining} -> ${newScansRemaining}`);
+      
       await userRef.set({ 
-        scansRemaining: admin.firestore.FieldValue.increment(-1), 
-        scansUsed: admin.firestore.FieldValue.increment(1), 
+        scansRemaining: newScansRemaining,
+        scansUsed: newScansUsed,
         lastScanDate: new Date(),
         updatedAt: new Date() 
       }, { merge: true }); 
+      
+      // Return the values we just set
+      return {
+        ...currentData,
+        scansRemaining: newScansRemaining,
+        scansUsed: newScansUsed
+      };
     } 
      
-    const updated = await userRef.get(); 
-    return updated.data(); 
+    return currentData;
   } catch (error) { 
     console.error('Error updating user scans:', error); 
     return null;
@@ -613,7 +634,7 @@ app.post('/api/user', async (req, res) => {
   }
 });
 
-// 🎯 EMAIL-BASED USER LOOKUP
+// 🔥 CRITICAL FIX: EMAIL-BASED USER LOOKUP WITH PROPER DATE HANDLING
 app.post('/api/user/lookup', async (req, res) => { 
   try { 
     const { email } = req.body; 
@@ -632,6 +653,21 @@ app.post('/api/user/lookup', async (req, res) => {
         createAccount: true
       });
     }
+    
+    // Convert Firestore Timestamp to ISO string if needed
+    let expiryDateString = null;
+    if (userData.subscriptionExpiryDate) {
+      if (userData.subscriptionExpiryDate.toDate) {
+        // It's a Firestore Timestamp
+        expiryDateString = userData.subscriptionExpiryDate.toDate().toISOString();
+      } else if (userData.subscriptionExpiryDate instanceof Date) {
+        // It's already a Date object
+        expiryDateString = userData.subscriptionExpiryDate.toISOString();
+      } else {
+        // It's already a string
+        expiryDateString = userData.subscriptionExpiryDate;
+      }
+    }
      
     console.log('📧🔍 ✅ User found successfully');
     res.json({ 
@@ -639,7 +675,7 @@ app.post('/api/user/lookup', async (req, res) => {
       subscriptionStatus: userData.subscriptionStatus || 'free',
       tier: userData.tier || 'free',
       scansRemaining: userData.scansRemaining || 3,
-      subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
+      expiryDate: expiryDateString,  // CRITICAL FIX: Use 'expiryDate' not 'subscriptionExpiryDate'
       autoRenewStatus: userData.autoRenewStatus || false,
       appleUserId: userData.appleUserId || null,
       email: userData.email
@@ -661,11 +697,22 @@ app.get('/api/user/:deviceId', async (req, res) => {
       const userDoc = await db.collection('users').doc(deviceId).get();
       if (userDoc.exists) {
         const userData = userDoc.data();
+        
+        // Convert timestamp if needed
+        let expiryDateString = null;
+        if (userData.subscriptionExpiryDate) {
+          if (userData.subscriptionExpiryDate.toDate) {
+            expiryDateString = userData.subscriptionExpiryDate.toDate().toISOString();
+          } else {
+            expiryDateString = userData.subscriptionExpiryDate;
+          }
+        }
+        
         return res.json({ 
           subscriptionStatus: userData.subscriptionStatus || 'free',
           tier: userData.tier || 'free',
           scansRemaining: userData.scansRemaining || 3,
-          subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
+          expiryDate: expiryDateString,  // Use 'expiryDate'
           autoRenewStatus: userData.autoRenewStatus || false,
           appleUserId: userData.appleUserId || null,
           migrationNeeded: false
@@ -686,12 +733,22 @@ app.get('/api/user/:deviceId', async (req, res) => {
     
     const userData = userDoc.data();
     console.log('🔄📱 Legacy user found, migration needed');
+    
+    // Convert timestamp if needed
+    let expiryDateString = null;
+    if (userData.subscriptionExpiryDate) {
+      if (userData.subscriptionExpiryDate.toDate) {
+        expiryDateString = userData.subscriptionExpiryDate.toDate().toISOString();
+      } else {
+        expiryDateString = userData.subscriptionExpiryDate;
+      }
+    }
      
     res.json({ 
       subscriptionStatus: userData.subscriptionStatus || 'free',
       tier: userData.tier || 'free',
       scansRemaining: userData.scansRemaining || 3,
-      subscriptionExpiryDate: userData.subscriptionExpiryDate || null,
+      expiryDate: expiryDateString,  // Use 'expiryDate'
       autoRenewStatus: userData.autoRenewStatus || false,
       appleUserId: userData.appleUserId || null,
       migrationNeeded: true
@@ -992,7 +1049,9 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
             cookingTime: recipe.cookingTime || "30 minutes", 
             difficulty: recipe.difficulty || "Medium", 
             servings: recipe.servings || 4, 
-            ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : ["Ingredients not specified"], 
+            ingredients: Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0 
+              ? recipe.ingredients 
+              : ["Could not identify specific ingredients from the image. Please try with a clearer photo."],
             instructions: Array.isArray(recipe.instructions) ? recipe.instructions : ["Instructions not provided"], 
             tips: recipe.tips || "Enjoy your meal!" 
           }; 
@@ -1010,7 +1069,7 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
           difficulty: "Easy", 
           servings: 4, 
           ingredients: [ 
-            "Ingredients from your image" 
+            "Could not identify specific ingredients from the image. Please try with a clearer photo."
           ], 
           instructions: [ 
             "Combine all ingredients", 
@@ -1316,7 +1375,7 @@ app.get('/health', (req, res) => {
   res.json({  
     status: 'ok',  
     timestamp: new Date(), 
-    version: '5.0.0-EMAIL-BASED-FINAL',
+    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
     features: { 
       emailBasedAuthentication: true,
       deviceIdMigration: true,
@@ -1333,7 +1392,8 @@ app.get('/health', (req, res) => {
       emailValidation: true,
       historySync: true,
       favoritesSync: true,
-      groceryImageStorage: true
+      groceryImageStorage: true,
+      scanCountFix: 'MANUAL_CALCULATION'
     } 
   }); 
 }); 
@@ -1341,11 +1401,11 @@ app.get('/health', (req, res) => {
 // Test endpoint
 app.get('/api/test', (req, res) => { 
   res.json({  
-    message: 'GrubLens Professional Email-Based API Ready! - NO MORE DEVICE ID HELL', 
+    message: 'GrubLens Professional Email-Based API Ready! - PRODUCTION HOTFIX APPLIED', 
     hasOpenAIKey: !!process.env.OPENAI_API_KEY, 
     hasAppleSecret: !!process.env.APPLE_SHARED_SECRET, 
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set', 
-    version: '5.0.0-EMAIL-BASED-FINAL',
+    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
     hasFirebase: !!admin.apps.length, 
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
     authenticationModel: 'EMAIL_BASED_PROFESSIONAL',
@@ -1356,13 +1416,18 @@ app.get('/api/test', (req, res) => {
     userPersistence: 'CROSS_DEVICE_CROSS_INSTALL',
     historySupport: 'FIREBASE_SYNC_ENABLED',
     favoritesSupport: 'FIREBASE_SYNC_ENABLED',
-    groceryImageStorage: 'FIREBASE_PERMANENT_STORAGE'
+    groceryImageStorage: 'FIREBASE_PERMANENT_STORAGE',
+    criticalFixes: {
+      scanCountUpdate: 'MANUAL_CALCULATION_IMPLEMENTED',
+      expiryDateField: 'USING_CORRECT_FIELD_NAME',
+      timestampConversion: 'FIRESTORE_TO_ISO_STRING'
+    }
   }); 
 }); 
 
 // Root endpoint
 app.get('/', (req, res) => { 
-  res.send('🔥 GrubLens Professional Email-Based API v5.0.0 - NO MORE DEVICE ID HELL!'); 
+  res.send('🔥 GrubLens Professional Email-Based API v5.0.1 - PRODUCTION HOTFIX APPLIED!'); 
 }); 
 
 app.listen(PORT, () => { 
@@ -1379,7 +1444,11 @@ app.listen(PORT, () => {
   console.log(`📜 History Sync: Firebase-backed history across devices`);
   console.log(`⭐ Favorites Sync: Firebase-backed favorites across devices`);
   console.log(`📸 Image Storage: Permanent Firebase storage for all images`);
-  console.log(`🏆 READY TO END YOUR 1.5 MONTH NIGHTMARE!`);
+  console.log(`🔥 CRITICAL FIXES APPLIED:`);
+  console.log(`   ✅ Scan count using manual calculation`);
+  console.log(`   ✅ expiryDate field name corrected`);
+  console.log(`   ✅ Firestore timestamps converted to ISO strings`);
+  console.log(`🏆 PRODUCTION HOTFIX READY!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
 }); 
