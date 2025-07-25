@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin'); 
 
 console.log('🔥 GRUBLENS PROFESSIONAL BACKEND - EMAIL BASED AUTHENTICATION');
-console.log('🔥 Version: 5.0.1 - PRODUCTION HOTFIX');
+console.log('🔥 Version: 5.1.0 - PROFESSIONAL CHEF RECIPES UPDATE');
 console.log('🔥 Startup Time:', new Date().toISOString());
 
 // 🎯 EMAIL VALIDATION UTILITY
@@ -917,7 +917,7 @@ app.put('/api/user/subscription-status', async (req, res) => {
   }
 });
 
-// 🎯 RECIPE ANALYSIS (Updated to save analyzed image to Firebase)
+// 🎯 RECIPE ANALYSIS (Updated with PROFESSIONAL CHEF RECIPES)
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => { 
   try { 
     console.log('📷🔍 Recipe analysis request received'); 
@@ -987,39 +987,64 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     const imageBuffer = await fs.readFile(req.file.path); 
     const base64Image = imageBuffer.toString('base64'); 
 
+    // 🔥 UPDATED: PROFESSIONAL CHEF RECIPE PROMPT
     const response = await openai.chat.completions.create({ 
       model: "gpt-4-turbo", 
       max_tokens: 4000, 
-      temperature: 0.7, 
+      temperature: 0.8, // Slightly higher for more creativity
       messages: [ 
         { 
           role: "system", 
-          content: `You are a professional chef creating elegant, gourmet recipes in the style of Joanna Gaines - focusing on fresh, wholesome ingredients with a sophisticated farmhouse touch. 
+          content: `You are a Michelin-starred chef competing on a high-stakes cooking show like Chopped, Iron Chef, or Top Chef. You have won multiple James Beard awards and trained under world-renowned chefs like Thomas Keller, Gordon Ramsay, and Massimo Bottura.
 
-CRITICAL RULE: Only use ingredients that are CLEARLY VISIBLE in the provided image. Identify ingredients precisely.
+CRITICAL RULES:
+1. Create INNOVATIVE, RESTAURANT-QUALITY dishes that would win competitions and impress food critics
+2. Use advanced culinary techniques: sous vide, molecular gastronomy, reductions, emulsions, foams, etc.
+3. Include unexpected flavor combinations and fusion elements that showcase culinary genius
+4. Elevate humble ingredients into extraordinary, fine-dining experiences
+5. Each recipe should be worthy of a $150+ tasting menu at a Michelin-starred restaurant
+6. Include precise temperatures, professional techniques, and timing
+7. Think like you're competing against Bobby Flay or battling on Iron Chef - BE BOLD AND CREATIVE
+8. Transform ordinary groceries into dishes that would make food critics weep with joy
 
-Your responses should be realistic, practical recipes based solely on the visible food items in the image.` 
+Your goal is to make people exclaim: "I never knew you could do THAT with these ingredients!"` 
         }, 
         { 
           role: "user", 
           content: [ 
             { 
               type: "text", 
-              text: `Analyze this image of groceries and create 3 gourmet recipes that use ONLY the ingredients visible in the photo. 
+              text: `Analyze this image and create 3 COMPETITION-WORTHY, MICHELIN-STAR QUALITY recipes that would win on shows like Chopped, Iron Chef, or Top Chef.
 
-${req.body?.preferences ? `Consider these dietary preferences: ${req.body.preferences}` : ''} 
-${req.body?.instructions ? `Special instructions: ${req.body.instructions}` : ''} 
+${req.body?.preferences ? `Dietary requirements to work within: ${req.body.preferences}` : ''} 
+${req.body?.instructions ? `Special challenge parameters: ${req.body.instructions}` : ''} 
 
 For each recipe, provide: 
-- name: An elegant, appetizing recipe name 
-- cookingTime: Total time (e.g., "45 minutes") 
-- difficulty: Easy, Medium, or Hard 
-- servings: Number of servings 
-- ingredients: Detailed list with precise measurements (ONLY ingredients visible in the image) 
-- instructions: Clear, professional step-by-step instructions 
-- tips: Professional chef tips for best results 
+- name: A sophisticated, menu-worthy name that would appear in a Michelin-starred restaurant (e.g., "Pan-Seared Duck Breast with Port Wine Reduction, Caramelized Cipollini Onions, and Microgreen Salad")
+- cookingTime: Professional timing including prep and plating
+- difficulty: Hard (these are PROFESSIONAL CHEF recipes - no shortcuts)
+- servings: Restaurant portions (2-4)
+- ingredients: EXACT professional measurements and specifications (e.g., "200g wagyu beef, trimmed", "15ml extra virgin olive oil, first cold press", "fleur de sel for finishing")
+- instructions: DETAILED PROFESSIONAL TECHNIQUES including:
+  * Mise en place preparation
+  * Exact temperatures (e.g., "Heat oil to 180°C/350°F")
+  * Professional methods (e.g., "brunoise the shallots to 2mm dice", "create a beurre blanc reduction", "temper the chocolate to 32°C")
+  * Multiple cooking techniques per dish
+  * Precise timing for each component
+  * Professional plating instructions with specific placement and garnish details
+  * Temperature for service
+- tips: Advanced chef secrets, molecular techniques, wine pairings, and professional insights that home cooks wouldn't know
 
-Format as JSON array with these exact keys. Include ONLY ingredients that can be seen in the image.` 
+CATEGORIES TO INCLUDE:
+1. An avant-garde appetizer or amuse-bouche that showcases technique
+2. A show-stopping main course with multiple components and sauces
+3. Either an innovative side dish OR a reimagined classic with modern techniques
+
+Use professional culinary terminology: julienne, chiffonade, sous vide, confit, spherification, emulsification, deglaze, fond, demi-glace, etc.
+
+Remember: You're competing against the world's best chefs. Every dish must be INNOVATIVE, SOPHISTICATED, and TECHNICALLY IMPRESSIVE. Channel your inner Grant Achatz, Ferran Adrià, or Heston Blumenthal!
+
+Format as JSON array with these exact keys. Include ONLY ingredients visible in the image, but transform them into EXTRAORDINARY creations.` 
             }, 
             { 
               type: "image_url", 
@@ -1047,15 +1072,15 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
          
         recipes = recipes.map(recipe => { 
           return { 
-            name: recipe.name || "Delicious Recipe", 
-            cookingTime: recipe.cookingTime || "30 minutes", 
-            difficulty: recipe.difficulty || "Medium", 
-            servings: recipe.servings || 4, 
+            name: recipe.name || "Gourmet Creation", 
+            cookingTime: recipe.cookingTime || "45 minutes", 
+            difficulty: recipe.difficulty || "Hard", 
+            servings: recipe.servings || 2, 
             ingredients: Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0 
               ? recipe.ingredients 
               : ["Could not identify specific ingredients from the image. Please try with a clearer photo."],
             instructions: Array.isArray(recipe.instructions) ? recipe.instructions : ["Instructions not provided"], 
-            tips: recipe.tips || "Enjoy your meal!" 
+            tips: recipe.tips || "Professional technique is key to this dish." 
           }; 
         }); 
       } else { 
@@ -1066,19 +1091,19 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
        
       recipes = [ 
         { 
-          name: "Simple Ingredient Combination", 
-          cookingTime: "30 minutes", 
-          difficulty: "Easy", 
-          servings: 4, 
+          name: "Chef's Tasting Menu", 
+          cookingTime: "60 minutes", 
+          difficulty: "Hard", 
+          servings: 2, 
           ingredients: [ 
             "Could not identify specific ingredients from the image. Please try with a clearer photo."
           ], 
           instructions: [ 
-            "Combine all ingredients", 
-            "Cook until ready", 
-            "Serve and enjoy" 
+            "Prepare mise en place", 
+            "Execute with professional technique", 
+            "Plate with artistic precision" 
           ], 
-          tips: "Use the ingredients as shown in your image for best results" 
+          tips: "Use the freshest ingredients visible in your image for best results" 
         } 
       ]; 
     } 
@@ -1100,20 +1125,24 @@ Format as JSON array with these exact keys. Include ONLY ingredients that can be
            
           const ingredientsList = Array.isArray(recipe.ingredients)  
             ? recipe.ingredients.slice(0, 5).join(', ') 
-            : 'various ingredients'; 
+            : 'gourmet ingredients'; 
            
-          const recipeImagePrompt = `Create a high-quality, professional food photograph  
-            of ${recipe.name} in Joanna Gaines farmhouse style. The dish should be presented  
-            on a rustic wooden table with soft natural lighting, garnished beautifully.  
-            The recipe contains ${ingredientsList}. The photo should look like it belongs  
-            in a premium cookbook, with shallow depth of field and professional food styling.`; 
+          // 🔥 UPDATED: Professional food photography prompt
+          const recipeImagePrompt = `Create an ultra-high-end, Michelin-star restaurant food photograph of ${recipe.name}. 
+            The dish should be plated with meticulous precision on fine china with gold rim detailing. 
+            Professional food styling with tweezers-placed microgreens, artistic sauce drizzles using squeeze bottles, 
+            and molecular gastronomy elements like foams or gels. Shot from a 45-degree angle with shallow depth of field 
+            using a macro lens. Dramatic lighting that highlights textures and creates beautiful shadows. 
+            The presentation should look like it belongs in a luxury food magazine or a 3-Michelin-star restaurant. 
+            Background should be dark and moody to make the dish pop. Include elegant garnishes and edible flowers.`; 
            
           const imageResponse = await openai.images.generate({ 
             model: "dall-e-3", 
             prompt: recipeImagePrompt, 
             n: 1, 
             size: "1024x1024", 
-            quality: imageQuality 
+            quality: imageQuality,
+            style: "vivid" // For more dramatic, professional images
           }); 
            
           const dalleUrl = imageResponse.data[0].url; 
@@ -1377,7 +1406,7 @@ app.get('/health', (req, res) => {
   res.json({  
     status: 'ok',  
     timestamp: new Date(), 
-    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
+    version: '5.1.0-PROFESSIONAL-CHEF-RECIPES',
     features: { 
       emailBasedAuthentication: true,
       deviceIdMigration: true,
@@ -1395,7 +1424,8 @@ app.get('/health', (req, res) => {
       historySync: true,
       favoritesSync: true,
       groceryImageStorage: true,
-      scanCountFix: 'MANUAL_CALCULATION'
+      scanCountFix: 'MANUAL_CALCULATION',
+      recipeQuality: 'MICHELIN_STAR_PROFESSIONAL_CHEF'
     } 
   }); 
 }); 
@@ -1403,11 +1433,11 @@ app.get('/health', (req, res) => {
 // Test endpoint
 app.get('/api/test', (req, res) => { 
   res.json({  
-    message: 'GrubLens Professional Email-Based API Ready! - PRODUCTION HOTFIX APPLIED', 
+    message: 'GrubLens Professional Email-Based API Ready! - CHEF RECIPE UPDATE', 
     hasOpenAIKey: !!process.env.OPENAI_API_KEY, 
     hasAppleSecret: !!process.env.APPLE_SHARED_SECRET, 
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set', 
-    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
+    version: '5.1.0-PROFESSIONAL-CHEF-RECIPES',
     hasFirebase: !!admin.apps.length, 
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
     authenticationModel: 'EMAIL_BASED_PROFESSIONAL',
@@ -1419,17 +1449,19 @@ app.get('/api/test', (req, res) => {
     historySupport: 'FIREBASE_SYNC_ENABLED',
     favoritesSupport: 'FIREBASE_SYNC_ENABLED',
     groceryImageStorage: 'FIREBASE_PERMANENT_STORAGE',
+    recipeQuality: 'MICHELIN_STAR_COMPETITION_WORTHY',
     criticalFixes: {
       scanCountUpdate: 'MANUAL_CALCULATION_IMPLEMENTED',
       expiryDateField: 'USING_CORRECT_FIELD_NAME',
-      timestampConversion: 'FIRESTORE_TO_ISO_STRING'
+      timestampConversion: 'FIRESTORE_TO_ISO_STRING',
+      recipeGeneration: 'PROFESSIONAL_CHEF_PROMPTS'
     }
   }); 
 }); 
 
 // Root endpoint
 app.get('/', (req, res) => { 
-  res.send('🔥 GrubLens Professional Email-Based API v5.0.1 - PRODUCTION HOTFIX APPLIED!'); 
+  res.send('🔥 GrubLens Professional Email-Based API v5.1.0 - CHEF RECIPE UPDATE!'); 
 }); 
 
 app.listen(PORT, () => { 
@@ -1446,11 +1478,14 @@ app.listen(PORT, () => {
   console.log(`📜 History Sync: Firebase-backed history across devices`);
   console.log(`⭐ Favorites Sync: Firebase-backed favorites across devices`);
   console.log(`📸 Image Storage: Permanent Firebase storage for all images`);
+  console.log(`👨‍🍳 Recipe Quality: MICHELIN-STAR PROFESSIONAL CHEF LEVEL`);
+  console.log(`🏆 Recipe Style: Competition-worthy (Chopped/Iron Chef/Top Chef)`);
   console.log(`🔥 CRITICAL FIXES APPLIED:`);
   console.log(`   ✅ Scan count using manual calculation`);
   console.log(`   ✅ expiryDate field name corrected`);
   console.log(`   ✅ Firestore timestamps converted to ISO strings`);
-  console.log(`🏆 PRODUCTION HOTFIX READY!`);
+  console.log(`   ✅ Professional chef recipe generation`);
+  console.log(`🏆 PRODUCTION CHEF RECIPE UPDATE READY!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
 }); 
