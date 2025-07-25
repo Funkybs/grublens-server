@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin'); 
 
 console.log('🔥 GRUBLENS PROFESSIONAL BACKEND - EMAIL BASED AUTHENTICATION');
-console.log('🔥 Version: 5.2.0 - ACHIEVABLE AMAZING RECIPES UPDATE');
+console.log('🔥 Version: 5.0.1 - PRODUCTION HOTFIX');
 console.log('🔥 Startup Time:', new Date().toISOString());
 
 // 🎯 EMAIL VALIDATION UTILITY
@@ -917,7 +917,7 @@ app.put('/api/user/subscription-status', async (req, res) => {
   }
 });
 
-// 🎯 RECIPE ANALYSIS (Updated with PROFESSIONAL CHEF RECIPES)
+// 🎯 RECIPE ANALYSIS (Updated to save analyzed image to Firebase)
 app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => { 
   try { 
     console.log('📷🔍 Recipe analysis request received'); 
@@ -987,63 +987,39 @@ app.post('/api/analyze-groceries', upload.single('image'), async (req, res) => {
     const imageBuffer = await fs.readFile(req.file.path); 
     const base64Image = imageBuffer.toString('base64'); 
 
-    // 🔥 UPDATED: IMPRESSIVE BUT ACHIEVABLE RECIPE PROMPT
     const response = await openai.chat.completions.create({ 
       model: "gpt-4-turbo", 
       max_tokens: 4000, 
-      temperature: 0.7, // Good balance for creativity
+      temperature: 0.7, 
       messages: [ 
         { 
           role: "system", 
-          content: `You are that ONE friend everyone has who's an AMAZING home cook - the one who can look at random ingredients and whip up something that makes everyone go "HOLY SHIT, how did you make THAT?!" You learned from Food Network, YouTube, and lots of experimenting. You make food that looks and tastes like it's from a fancy restaurant but using regular kitchen equipment.
+          content: `You are a professional chef creating elegant, gourmet recipes in the style of Joanna Gaines - focusing on fresh, wholesome ingredients with a sophisticated farmhouse touch. 
 
-CRITICAL RULES:
-1. Create recipes that SOUND fancy and TASTE incredible but are ACTUALLY DOABLE by regular people
-2. Use clever techniques that make simple ingredients taste AMAZING (like adding soy sauce to caramel, or fish sauce to beef)
-3. Include "chef secrets" that are actually simple (like resting meat, deglazing pans, building flavor layers)
-4. NO fancy equipment needed - just regular pots, pans, oven, stovetop
-5. Make it LOOK restaurant-quality with simple plating tricks
-6. Transform everyday groceries into "OH MY GOD" moments
-7. Include time-saving hacks and "you can prep this earlier" notes
-8. Every recipe should make someone text their friends "You HAVE to try this recipe I just made!"
+CRITICAL RULE: Only use ingredients that are CLEARLY VISIBLE in the provided image. Identify ingredients precisely.
 
-Your goal: Make regular moms feel like kitchen ROCKSTARS with recipes that are secretly not that hard but taste INSANELY good!` 
+Your responses should be realistic, practical recipes based solely on the visible food items in the image.` 
         }, 
         { 
           role: "user", 
           content: [ 
             { 
               type: "text", 
-              text: `Look at these groceries and create 3 BADASS recipes that will blow people's minds but that a regular person can actually make without crying in the kitchen.
+              text: `Analyze this image of groceries and create 3 gourmet recipes that use ONLY the ingredients visible in the photo. 
 
-${req.body?.preferences ? `Dietary needs: ${req.body.preferences}` : ''} 
-${req.body?.instructions ? `Special request: ${req.body.instructions}` : ''} 
+${req.body?.preferences ? `Consider these dietary preferences: ${req.body.preferences}` : ''} 
+${req.body?.instructions ? `Special instructions: ${req.body.instructions}` : ''} 
 
 For each recipe, provide: 
-- name: A restaurant-style name that sounds impressive (e.g., "Honey-Glazed Chicken with Crispy Garlic and Fresh Herbs" or "Caramelized Onion and Gruyere Tart")
-- cookingTime: REALISTIC time including prep (30-75 minutes max)
-- difficulty: Easy to Medium (with one that's Medium-Hard for adventurous cooks)
-- servings: 4 (family-sized)
-- ingredients: Clear measurements using normal grocery store ingredients (e.g., "2 lbs chicken thighs", "3 cloves garlic, minced", "1/2 cup soy sauce")
-- instructions: STEP-BY-STEP instructions that include:
-  * What can be prepped ahead (busy parent friendly!)
-  * Exact oven temps in Fahrenheit
-  * Clear explanations of techniques (e.g., "deglaze the pan by adding wine and scraping up the brown bits - that's where the flavor is!")
-  * Multitasking tips (e.g., "while the chicken roasts, make the sauce")
-  * Simple but impressive plating suggestions
-  * Common mistakes to avoid
-- tips: Game-changing tips like:
-  * Secret ingredients that elevate the dish
-  * Substitutions that work
-  * How to know when it's perfectly done
-  * Make-ahead and leftover ideas
-  * Why certain steps matter (the science made simple)
+- name: An elegant, appetizing recipe name 
+- cookingTime: Total time (e.g., "45 minutes") 
+- difficulty: Easy, Medium, or Hard 
+- servings: Number of servings 
+- ingredients: Detailed list with precise measurements (ONLY ingredients visible in the image) 
+- instructions: Clear, professional step-by-step instructions 
+- tips: Professional chef tips for best results 
 
-IMPORTANT: One recipe should be a 30-minute weeknight hero, one should be a weekend showstopper (but still doable), and one should transform basic ingredients into something unexpectedly delicious.
-
-Remember: We want that "I can't believe I made this!" feeling. Make it SOUND fancy, LOOK gorgeous, TASTE incredible, but BE achievable by someone who learned to cook from Pinterest and determination!
-
-Format as JSON array with these exact keys. Use ONLY ingredients visible in the image.` 
+Format as JSON array with these exact keys. Include ONLY ingredients that can be seen in the image.` 
             }, 
             { 
               type: "image_url", 
@@ -1071,15 +1047,15 @@ Format as JSON array with these exact keys. Use ONLY ingredients visible in the 
          
         recipes = recipes.map(recipe => { 
           return { 
-            name: recipe.name || "Gourmet Creation", 
-            cookingTime: recipe.cookingTime || "45 minutes", 
-            difficulty: recipe.difficulty || "Hard", 
-            servings: recipe.servings || 2, 
+            name: recipe.name || "Delicious Recipe", 
+            cookingTime: recipe.cookingTime || "30 minutes", 
+            difficulty: recipe.difficulty || "Medium", 
+            servings: recipe.servings || 4, 
             ingredients: Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0 
               ? recipe.ingredients 
               : ["Could not identify specific ingredients from the image. Please try with a clearer photo."],
             instructions: Array.isArray(recipe.instructions) ? recipe.instructions : ["Instructions not provided"], 
-            tips: recipe.tips || "Professional technique is key to this dish." 
+            tips: recipe.tips || "Enjoy your meal!" 
           }; 
         }); 
       } else { 
@@ -1090,20 +1066,19 @@ Format as JSON array with these exact keys. Use ONLY ingredients visible in the 
        
       recipes = [ 
         { 
-          name: "Magic One-Pan Wonder", 
-          cookingTime: "45 minutes", 
+          name: "Simple Ingredient Combination", 
+          cookingTime: "30 minutes", 
           difficulty: "Easy", 
           servings: 4, 
           ingredients: [ 
             "Could not identify specific ingredients from the image. Please try with a clearer photo."
           ], 
           instructions: [ 
-            "Preheat oven to 425°F", 
-            "Season everything generously", 
-            "Roast until golden and delicious", 
-            "Let rest 5 minutes before serving" 
+            "Combine all ingredients", 
+            "Cook until ready", 
+            "Serve and enjoy" 
           ], 
-          tips: "The secret is high heat and not overcrowding the pan - this creates that restaurant-style caramelization!" 
+          tips: "Use the ingredients as shown in your image for best results" 
         } 
       ]; 
     } 
@@ -1125,24 +1100,20 @@ Format as JSON array with these exact keys. Use ONLY ingredients visible in the 
            
           const ingredientsList = Array.isArray(recipe.ingredients)  
             ? recipe.ingredients.slice(0, 5).join(', ') 
-            : 'gourmet ingredients'; 
+            : 'various ingredients'; 
            
-          // 🔥 UPDATED: Impressive but homestyle food photography
-          const recipeImagePrompt = `Create a gorgeous, magazine-worthy food photograph of ${recipe.name}. 
-            The dish should look INCREDIBLE but achievable - like it's from Bon Appétit or Food & Wine magazine. 
-            Beautiful but natural plating on nice (but normal) dinnerware. Warm, inviting lighting that makes 
-            the food look absolutely delicious. Fresh herbs as garnish, visible textures, maybe a fork taking 
-            a bite to show how tender/juicy it is. Background should be a clean kitchen counter or rustic wood table. 
-            The photo should make people think "I NEED to make this RIGHT NOW!" Style: modern food blog meets 
-            cookbook photography - impressive but not intimidating.`; 
+          const recipeImagePrompt = `Create a high-quality, professional food photograph  
+            of ${recipe.name} in Joanna Gaines farmhouse style. The dish should be presented  
+            on a rustic wooden table with soft natural lighting, garnished beautifully.  
+            The recipe contains ${ingredientsList}. The photo should look like it belongs  
+            in a premium cookbook, with shallow depth of field and professional food styling.`; 
            
           const imageResponse = await openai.images.generate({ 
             model: "dall-e-3", 
             prompt: recipeImagePrompt, 
             n: 1, 
             size: "1024x1024", 
-            quality: imageQuality,
-            style: "vivid" // For more dramatic, professional images
+            quality: imageQuality 
           }); 
            
           const dalleUrl = imageResponse.data[0].url; 
@@ -1406,7 +1377,7 @@ app.get('/health', (req, res) => {
   res.json({  
     status: 'ok',  
     timestamp: new Date(), 
-    version: '5.2.0-ACHIEVABLE-AMAZING-RECIPES',
+    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
     features: { 
       emailBasedAuthentication: true,
       deviceIdMigration: true,
@@ -1424,8 +1395,7 @@ app.get('/health', (req, res) => {
       historySync: true,
       favoritesSync: true,
       groceryImageStorage: true,
-      scanCountFix: 'MANUAL_CALCULATION',
-      recipeQuality: 'IMPRESSIVE_BUT_ACHIEVABLE'
+      scanCountFix: 'MANUAL_CALCULATION'
     } 
   }); 
 }); 
@@ -1433,11 +1403,11 @@ app.get('/health', (req, res) => {
 // Test endpoint
 app.get('/api/test', (req, res) => { 
   res.json({  
-    message: 'GrubLens Professional Email-Based API Ready! - AMAZING BUT ACHIEVABLE UPDATE', 
+    message: 'GrubLens Professional Email-Based API Ready! - PRODUCTION HOTFIX APPLIED', 
     hasOpenAIKey: !!process.env.OPENAI_API_KEY, 
     hasAppleSecret: !!process.env.APPLE_SHARED_SECRET, 
     keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : 'Not set', 
-    version: '5.2.0-ACHIEVABLE-AMAZING-RECIPES',
+    version: '5.0.1-EMAIL-BASED-PRODUCTION-FIX',
     hasFirebase: !!admin.apps.length, 
     firebaseConfigured: !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL),
     authenticationModel: 'EMAIL_BASED_PROFESSIONAL',
@@ -1449,19 +1419,17 @@ app.get('/api/test', (req, res) => {
     historySupport: 'FIREBASE_SYNC_ENABLED',
     favoritesSupport: 'FIREBASE_SYNC_ENABLED',
     groceryImageStorage: 'FIREBASE_PERMANENT_STORAGE',
-    recipeQuality: 'IMPRESSIVE_BUT_ACHIEVABLE_HOME_COOKING',
     criticalFixes: {
       scanCountUpdate: 'MANUAL_CALCULATION_IMPLEMENTED',
       expiryDateField: 'USING_CORRECT_FIELD_NAME',
-      timestampConversion: 'FIRESTORE_TO_ISO_STRING',
-      recipeGeneration: 'AMAZING_BUT_DOABLE_PROMPTS'
+      timestampConversion: 'FIRESTORE_TO_ISO_STRING'
     }
   }); 
 }); 
 
 // Root endpoint
 app.get('/', (req, res) => { 
-  res.send('🔥 GrubLens Professional Email-Based API v5.2.0 - AMAZING BUT ACHIEVABLE RECIPES!'); 
+  res.send('🔥 GrubLens Professional Email-Based API v5.0.1 - PRODUCTION HOTFIX APPLIED!'); 
 }); 
 
 app.listen(PORT, () => { 
@@ -1478,14 +1446,11 @@ app.listen(PORT, () => {
   console.log(`📜 History Sync: Firebase-backed history across devices`);
   console.log(`⭐ Favorites Sync: Firebase-backed favorites across devices`);
   console.log(`📸 Image Storage: Permanent Firebase storage for all images`);
-  console.log(`👨‍🍳 Recipe Quality: IMPRESSIVE BUT ACHIEVABLE - REAL PEOPLE CAN MAKE THESE!`);
-  console.log(`🏆 Recipe Style: Restaurant-worthy but home kitchen friendly`);
   console.log(`🔥 CRITICAL FIXES APPLIED:`);
   console.log(`   ✅ Scan count using manual calculation`);
   console.log(`   ✅ expiryDate field name corrected`);
   console.log(`   ✅ Firestore timestamps converted to ISO strings`);
-  console.log(`   ✅ Amazing but achievable recipe generation`);
-  console.log(`🏆 PRODUCTION AMAZING RECIPES UPDATE READY!`);
+  console.log(`🏆 PRODUCTION HOTFIX READY!`);
 }).on('error', (err) => { 
   console.error('Server error:', err); 
 }); 
